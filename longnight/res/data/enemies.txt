@@ -1,0 +1,1 @@
+trafmimic           name = "Trafmimic Cone"         type = "road"       health = "999"      shield = "999"
