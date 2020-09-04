@@ -2,7 +2,7 @@
 
 
 // A priority queue that doesn't care about access to anything but the topmost element. Uses a pairing heap structure.
-template <typename T>
+template <class T>
 class PriorityQueue
 {
 private:
@@ -94,5 +94,32 @@ public:
 		parent = new_parent;
 
 		return value;
+	}
+
+	/// <summary>Peeks at the top of the queue.</summary>
+	/// <param name="priority">A reference to be filled with the priority of the value at the top of the queue.</param>
+	/// <param name="value">A reference to be filled with the value at the top of the queue.</param>
+	/// <returns>True if the queue is nonempty, false otherwise.</returns>
+	bool peek(int& priority, T& value)
+	{
+		if (parent)
+		{
+			priority = parent->priority;
+			value = parent->value;
+			return true;
+		}
+
+		return false;
+	}
+
+	/// <summary>Empties the queue into a vector.</summary>
+	/// <param name="queue">Where all values in the queue are dumped in order.</param>
+	void dump(std::vector<T>& queue)
+	{
+		queue.clear();
+		while (!empty())
+		{
+			queue.push_back(pop());
+		}
 	}
 };

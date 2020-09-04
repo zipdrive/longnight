@@ -135,6 +135,57 @@ namespace battle
 	};
 
 
+	// A queue of events.
+	class Queue : public onion::UpdateListener
+	{
+	protected:
+		// The queue of events.
+		PriorityQueue<Event*> m_Queue;
+
+		// The current event being animated.
+		Event* m_Current = nullptr;
+
+		/// <summary>Sets m_Current to the next event in the queue that isn't null and doesn't immediately stop.</summary>
+		void get_next_event();
+
+		/// <summary>Updates the queue and the current Event.</summary>
+		/// <param name="frames_passed">The number of frames that have passed since the last update.</param>
+		virtual void __update(int frames_passed);
+
+	public:
+		/// <summary>Adds an Event to the front of the queue.</summary>
+		/// <param name="event">The Event to add.</param>
+		void insert(Event* event);
+
+		/// <summary>Adds an Event to the queue.</summary>
+		/// <param name="event">The Event to add.</param>
+		/// <param name="priority">The priority for the Event. Low numbers activate earlier.</param>
+		void insert(Event* event, int priority);
+
+		/// <summary>Clears the queue.</summary>
+		void clear();
+	};
+
+	// A queue that destroys itself once it's been emptied.
+	class TemporaryQueue : public Queue
+	{
+	protected:
+		/// <summary>Updates the queue and the current Event. Self-destructs if the queue has been exhausted.</summary>
+		/// <param name="frames_passed">The number of frames that have passed since the last update.</param>
+		void __update(int frames_passed);
+	};
+
+
+	/// <summary>Adds an event to the front of the primary queue.</summary>
+	/// <param name="event">The event to add.</param>
+	void primary_queue_insert(Event* event);
+
+	/// <summary>Adds an event to the primary queue.</summary>
+	/// <param name="event">The event to add.</param>
+	/// <param name="priority">The priority for the event. Low numbers activate earlier.</param>
+	void primary_queue_insert(Event* event, int priority);
+
+
 
 	// An event that advances all active entities forward on the timeline.
 	class TimelineEvent : public Event
@@ -324,6 +375,7 @@ namespace battle
 			// The coordinates of where to display the number.
 			vec2f m_Coordinates;
 
+			// The duration that the animation will remain unfrozen, in frames.
 			int m_Duration;
 
 			/// <summary>Updates the animation, and deletes itself when finished.</summary>
@@ -336,6 +388,7 @@ namespace battle
 			/// <summary>Creates the animation.</summary>
 			/// <param name="number">The number to display.</param>
 			/// <param name="start">The initial coordinates of where the number is displayed on screen.</param>
+			/// <param name="delay">The delay before the animation activates, in seconds.</param>
 			Animation(int number, const vec2i& start);
 
 			/// <summary>Starts the animation.</summary>
@@ -346,51 +399,83 @@ namespace battle
 		};
 
 	private:
+		// The animation for the number.
 		Animation* m_Animation;
 
 	public:
 		/// <summary>Creates a number that rises.</summary>
 		/// <param name="number">The number to display.</param>
 		/// <param name="start">The initial coordinates of where the number is displayed on screen.</param>
+		/// <param name="delay">The delay before the number first appears, in seconds.</param>
 		NumberEvent(int number, const vec2i& start);
 
+		/// <summary>Makes the number appear and start animating independently from the queue.</summary>
+		/// <returns>EVENT_STOP.</returns>
 		int start();
 	};
 
 
-
-	// The queue of Events.
-	class Queue : public onion::UpdateListener
+	
+	enum DamageSource
+	{
+		NORMAL_DAMAGE,
+		BURN_DAMAGE,
+		TOXIN_DAMAGE
+	};
+	
+	// An event where an entity takes damage.
+	class DamageEvent : public Event
 	{
 	private:
-		// The queue of events.
-		static PriorityQueue<Event*> m_Queue;
+		// The queue that this event has been put in.
+		Queue* m_Queue;
 
-		// The current event being animated.
-		Event* m_Current = nullptr;
+		// The entity taking damage.
+		Entity* m_Target;
 
-		/// <summary>Sets m_Current to the next event in the queue that isn't null and doesn't immediately stop.</summary>
-		void get_next_event();
+		// The amount of damage taken.
+		int m_Damage;
 
-		/// <summary>Updates the queue and the current Event.</summary>
-		/// <param name="frames_passed">The number of frames that have passed since the last update.</param>
-		void __update(int frames_passed);
+		// The source of the damage.
+		DamageSource m_Source;
+
+		/// <summary>Generates an event that animates the target taking damage.</summary>
+		/// <returns>A pointer to an Event allocated with new.</returns>
+		Event* generate_effect();
 
 	public:
-		/// <summary>Adds an Event to the queue.</summary>
-		/// <param name="event">The Event to add.</param>
-		/// <param name="priority">The priority for the Event. Low numbers activate earlier.</param>
-		static void insert(Event* event, int priority);
+		DamageEvent(Queue* queue, Entity* target, int damage, DamageSource source);
+
+		int start();
+	};
+
+	// An event where an entity is reduced to 0 Health.
+	class DefeatEvent : public Event
+	{
+	private:
+		// The entity that was reduced to 0 Health.
+		Entity* m_Entity;
+
+	public:
+		DefeatEvent(Entity* entity);
 	};
 
 
 
+	
+	
 	struct Agent
 	{
 	protected:
-		// The Entity that the Agent represents.
+		// The entity that the agent represents.
 		Entity* m_Self;
+
+	public:
+		/// <summary>Constructs an agent.</summary>
+		/// <param name="self">The entity that the agent represents.</param>
+		Agent(Entity* self);
 	};
+
 
 	
 	
@@ -400,18 +485,13 @@ namespace battle
 		// The sheet of sprites for the battle UI.
 		static onion::SpriteSheet* m_SpriteSheet;
 
-#define BATTLE_SPRITE_COUNT 28
+#define BATTLE_SPRITE_COUNT 36
 
 		// An array of sprites for the battle UI.
 		static SPRITE_KEY m_Sprites[BATTLE_SPRITE_COUNT];
 
-		
-
 		// The background for the battle.
 		onion::Graphic* m_Background;
-
-		// The queue of events.
-		Queue m_Queue;
 
 	public:
 		/// <summary>Displays a number.</summary>
@@ -421,6 +501,10 @@ namespace battle
 		/// <param name="leading_zeroes">The number of leading zeroes.</param>
 		/// <param name="palette">The palette to use when displaying the numbers.</param>
 		static void display_number(int number, bool small, onion::TextAlignment alignment, onion::Palette* palette, int leading_zeroes = 1);
+
+		/// <summary>Displays the status effects of an entity.</summary>
+		/// <param name="entity">The entity to display the status effects of.</param>
+		static void display_status(Entity* entity);
 
 		/// <summary>Creates a state for a battle.</summary>
 		/// <param name="enemies">A list of enemy IDs.</param>

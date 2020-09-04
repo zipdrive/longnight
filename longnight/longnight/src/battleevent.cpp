@@ -3,6 +3,8 @@
 #include "../include/battle.h"
 #include "../include/battleevent.h"
 
+#include <iostream>
+
 using namespace std;
 using namespace battle;
 
@@ -104,16 +106,29 @@ int TickEvent::start()
 		iter->second->trigger();
 	}
 
+	// Create a temporary queue for the burn and toxin animations
+	TemporaryQueue* tempqueue = new TemporaryQueue();
+
+	// Deduct Burn from Shield, then Health
+	if (m_Entity->burn > 0)
+	{
+		tempqueue->insert(new DamageEvent(tempqueue, m_Entity, m_Entity->burn--, BURN_DAMAGE), 0);
+	}
+
+	// Deduct Toxin from Health
+	if (m_Entity->toxin > 0)
+	{
+		tempqueue->insert(new DamageEvent(tempqueue, m_Entity, m_Entity->toxin--, TOXIN_DAMAGE), 1);
+	}
+
+	tempqueue->unfreeze();
+
+
 	// debug TODO remove later
 	if (m_Entity->time <= 0)
 	{
-		m_Entity->time = TIMELINE_MAX;
-
-		Queue::insert(new NumberEvent(254, m_Entity->coordinates + vec2i(m_Entity->dimensions.get(0) / 2, m_Entity->dimensions.get(1) / 2)), INT_MIN);
-		Queue::insert(new ShakeEvent(m_Entity->coordinates, vec2i(3, 1), 0.25f), INT_MIN + 1);
-		Queue::insert(new DelayEvent(0.35f), INT_MIN + 2);
-		Queue::insert(new NumberEvent(189, m_Entity->coordinates + vec2i(m_Entity->dimensions.get(0) / 2, m_Entity->dimensions.get(1) / 2)), INT_MIN + 3);
-		Queue::insert(new FlashEvent(&m_Entity->palette, vec3i(255, 255, 255), 0.5f, 0.2f, 0.f), INT_MIN + 4);
+		m_Entity->time = TIMELINE_MAX * 3 / 5;
+		primary_queue_insert(new DelayEvent(1.f));
 	}
 
 	return EVENT_STOP;

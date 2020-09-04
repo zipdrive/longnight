@@ -122,8 +122,6 @@ int Event::update(int frames_passed)
 }
 
 
-PriorityQueue<Event*> Queue::m_Queue{};
-
 void Queue::get_next_event()
 {
 	while (!m_Queue.empty())
@@ -161,14 +159,54 @@ void Queue::__update(int frames_passed)
 	}
 }
 
+void Queue::insert(Event* event)
+{
+	int p = 0;
+	Event* e = nullptr;
+	m_Queue.peek(p, e);
+
+	m_Queue.push(event, p - 1);
+}
+
 void Queue::insert(Event* event, int priority)
 {
 	m_Queue.push(event, priority);
 }
 
+void Queue::clear()
+{
+	vector<Event*> queue;
+	m_Queue.dump(queue);
+
+	for (auto iter = queue.begin(); iter != queue.end(); ++iter)
+		delete *iter;
+}
 
 
-#define TIMELINE_SPEED		9000
+void TemporaryQueue::__update(int frames_passed)
+{
+	Queue::__update(frames_passed);
+
+	if (m_Queue.empty() && m_Current == nullptr)
+		delete this;
+}
+
+
+Queue* g_PrimaryQueue;
+
+void battle::primary_queue_insert(Event* event)
+{
+	g_PrimaryQueue->insert(event);
+}
+
+void battle::primary_queue_insert(Event* event, int priority)
+{
+	g_PrimaryQueue->insert(event, priority);
+}
+
+
+
+#define TIMELINE_SPEED		3000
 
 TimelineEvent::TimelineEvent(const vector<Entity*>& entities)
 {
@@ -184,17 +222,17 @@ int TimelineEvent::update(int frames_passed)
 	{
 		if ((*iter)->cur_health > 0) // If the entity is not incapacitated
 		{
-			int prior = ((*iter)->time -= dt) / (TIMELINE_MAX / 5);
-
-			if ((*iter)->time / (TIMELINE_MAX / 5) != prior) // If the entity has passed one of the tick points
-			{
-				Queue::insert(new TickEvent(*iter), 1); // Trigger any tick listeners
-				ret = EVENT_STOP;
-			}
+			int prior = ((*iter)->time - 1) / (TIMELINE_MAX / 5);
+			(*iter)->time -= dt;
 
 			if ((*iter)->time <= 0) // If the entity has reached the front of the timeline
 			{
-				Queue::insert(new EntityEvent(*iter), (*iter)->time); // Let it take a turn
+				primary_queue_insert(new EntityEvent(*iter), (*iter)->time); // Let it take a turn
+				ret = EVENT_STOP;
+			}
+			else if (((*iter)->time - 1) / (TIMELINE_MAX / 5) != prior) // If the entity has passed one of the tick points
+			{
+				primary_queue_insert(new TickEvent(*iter), 1); // Trigger any tick listeners
 				ret = EVENT_STOP;
 			}
 		}
@@ -206,7 +244,7 @@ int TimelineEvent::update(int frames_passed)
 
 	if (ret == EVENT_STOP)
 	{
-		Queue::insert(new TimelineEvent(m_Entities), 2);
+		primary_queue_insert(new TimelineEvent(m_Entities), 2);
 	}
 	return ret;
 }
@@ -225,8 +263,8 @@ int EntityEvent::start()
 	// Check if the entity has an Agent to decide what to do
 	if (m_Entity->agent)
 	{
-		Queue::insert(new TurnEndEvent(m_Entity), m_Entity->time - 1);
-		Queue::insert(new TickEvent(m_Entity), m_Entity->time);
+		primary_queue_insert(new TickEvent(m_Entity));
+		primary_queue_insert(new TurnEndEvent(m_Entity));
 
 		// TODO use agent to generate a turn
 
@@ -245,8 +283,8 @@ int EntityEvent::update(int frames_passed)
 {
 	// TODO
 
-	Queue::insert(new TurnEndEvent(m_Entity), m_Entity->time - 1);
-	Queue::insert(new TickEvent(m_Entity), m_Entity->time);
+	primary_queue_insert(new TickEvent(m_Entity));
+	primary_queue_insert(new TurnEndEvent(m_Entity));
 	return EVENT_STOP;
 }
 
@@ -461,6 +499,74 @@ void NumberEvent::Animation::display() const
 
 
 
+DamageEvent::DamageEvent(Queue* queue, Entity* target, int damage, DamageSource source)
+{
+	m_Queue = queue;
+
+	m_Target = target;
+	m_Damage = damage;
+	m_Source = source;
+}
+
+Event* DamageEvent::generate_effect()
+{
+	if (m_Source == NORMAL_DAMAGE)
+		return new ShakeEvent(m_Target->coordinates, vec2i(3, 1), 0.25f);
+	else if (m_Source == BURN_DAMAGE)
+		return new FlashEvent(&m_Target->palette, vec3i(220, 28, 28), 1.f, 0.125f, 0.f);
+	else if (m_Source == TOXIN_DAMAGE)
+		return new FlashEvent(&m_Target->palette, vec3i(56, 164, 26), 1.f, 0.125f, 0.f);
+}
+
+int DamageEvent::start()
+{
+	if (m_Target->cur_health > 0)
+	{
+		int dh = m_Damage;
+
+		// Damage the target's Shield first, if the target has any and the damage isn't from Toxin
+		if (m_Target->cur_shield > 0 && m_Source != TOXIN_DAMAGE)
+		{
+			int ds = min(m_Target->cur_shield, m_Damage);
+
+			m_Target->cur_shield -= ds;
+			dh -= ds;
+		}
+
+		// Damage the target's Health
+		m_Target->cur_health -= min(m_Target->cur_health, dh);
+
+		// Queue animations for the damage
+		m_Queue->insert(new NumberEvent(m_Damage, m_Target->coordinates + vec2i(m_Target->dimensions.get(0) / 2, m_Target->dimensions.get(1) / 2)), INT_MIN);
+		m_Queue->insert(generate_effect(), INT_MIN + 1);
+		m_Queue->insert(new DelayEvent(m_Source == NORMAL_DAMAGE ? 0.35f : 0.15f), INT_MIN + 2);
+
+		if (m_Target->cur_health <= 0)
+		{
+			m_Queue->insert(new DefeatEvent(m_Target), INT_MIN + 3);
+		}
+	}
+
+	return EVENT_STOP;
+}
+
+
+DefeatEvent::DefeatEvent(Entity* entity)
+{
+	m_Entity = entity;
+}
+
+
+
+
+Agent::Agent(Entity* self)
+{
+	m_Self = self;
+}
+
+
+
+
 SpriteSheet* battle::State::m_SpriteSheet{ nullptr };
 
 SPRITE_KEY battle::State::m_Sprites[BATTLE_SPRITE_COUNT]{};
@@ -471,10 +577,18 @@ SPRITE_KEY battle::State::m_Sprites[BATTLE_SPRITE_COUNT]{};
 #define ALLY_BG						3
 #define ALLY_SHIELD					4
 #define ALLY_HEALTH					5
+#define ALLY_BAR_IN					31
 #define COLOR_SHIELD				6
 #define COLOR_HEALTH				7
 #define SMALL_NUMBERS				8
 #define LARGE_NUMBERS				18
+#define ENEMY_BAR_CAP				28
+#define ENEMY_BAR_MID				29
+#define ENEMY_BAR_IN				30
+#define STATUS_OFFENSE				32
+#define STATUS_DEFENSE				33
+#define STATUS_BURN					34
+#define STATUS_TOXIN				35
 
 battle::State::State(const vector<string>& enemies) 
 {
@@ -491,9 +605,19 @@ battle::State::State(const vector<string>& enemies)
 		m_Sprites[ALLY_BG] = Sprite::get_sprite("battle ally bg")->key;
 		m_Sprites[ALLY_SHIELD] = Sprite::get_sprite("battle ally shield")->key;
 		m_Sprites[ALLY_HEALTH] = Sprite::get_sprite("battle ally health")->key;
+		m_Sprites[ALLY_BAR_IN] = Sprite::get_sprite("battle ally bar in")->key;
+
+		m_Sprites[ENEMY_BAR_CAP] = Sprite::get_sprite("battle enemy bar cap")->key;
+		m_Sprites[ENEMY_BAR_MID] = Sprite::get_sprite("battle enemy bar mid")->key;
+		m_Sprites[ENEMY_BAR_IN] = Sprite::get_sprite("battle enemy bar in")->key;
 
 		m_Sprites[COLOR_SHIELD] = Sprite::get_sprite("battle color shield")->key;
 		m_Sprites[COLOR_HEALTH] = Sprite::get_sprite("battle color health")->key;
+
+		m_Sprites[STATUS_OFFENSE] = Sprite::get_sprite("battle status offense")->key;
+		m_Sprites[STATUS_DEFENSE] = Sprite::get_sprite("battle status defense")->key;
+		m_Sprites[STATUS_BURN] = Sprite::get_sprite("battle status burn")->key;
+		m_Sprites[STATUS_TOXIN] = Sprite::get_sprite("battle status toxin")->key;
 
 		for (int k = 9; k >= 0; --k)
 		{
@@ -528,7 +652,7 @@ battle::State::State(const vector<string>& enemies)
 		ally->cur_health = 999; // TODO
 		ally->max_health = 999;
 
-		ally->cur_shield = 0;
+		ally->cur_shield = 999;
 		ally->max_shield = 999;
 
 		ally->time = (rand() % (4 * TIMELINE_MAX / 5)) + (TIMELINE_MAX / 5);
@@ -536,6 +660,10 @@ battle::State::State(const vector<string>& enemies)
 		ally->palette.set_red_maps_to(vec4f(ui_palette.get(0, 0), ui_palette.get(1, 0), ui_palette.get(2, 0), ui_palette.get(3, 0)));
 		ally->palette.set_green_maps_to(vec4f(ui_palette.get(0, 1), ui_palette.get(1, 1), ui_palette.get(2, 1), ui_palette.get(3, 1)));
 		ally->palette.set_blue_maps_to(vec4f(ui_palette.get(0, 2), ui_palette.get(1, 2), ui_palette.get(2, 2), ui_palette.get(3, 2)));
+
+		// debug TODO remove
+		ally->burn = 162;
+		ally->toxin = 20;
 
 		ally_x += ally_bg->width;
 	}
@@ -554,6 +682,10 @@ battle::State::State(const vector<string>& enemies)
 
 		enemy_width += enemy->image->get_width();
 
+		// debug TODO remove
+		enemy->burn = 162;
+		enemy->toxin = 20;
+
 		enemy->time = (rand() % (4 * TIMELINE_MAX / 5)) + (TIMELINE_MAX / 5);
 	}
 
@@ -567,14 +699,16 @@ battle::State::State(const vector<string>& enemies)
 
 	g_Enemies.enemies = &g_Allies;
 
-	// Start up the queue
+	// Start up the queues
+	g_PrimaryQueue = new Queue();
+
 	vector<Entity*> all_entities;
 	for (auto iter = g_Allies.allies.begin(); iter != g_Allies.allies.end(); ++iter)
 		all_entities.push_back(*iter);
 	for (auto iter = g_Enemies.allies.begin(); iter != g_Enemies.allies.end(); ++iter)
 		all_entities.push_back(*iter);
-	m_Queue.insert(new TimelineEvent(all_entities), 2);
-	m_Queue.unfreeze();
+	g_PrimaryQueue->insert(new TimelineEvent(all_entities), 2);
+	g_PrimaryQueue->unfreeze();
 }
 
 battle::State::~State()
@@ -584,6 +718,9 @@ battle::State::~State()
 		delete *iter;
 	for (auto iter = g_Enemies.allies.begin(); iter != g_Enemies.allies.end(); ++iter)
 		delete *iter;
+
+	// Delete the primary queue.
+	delete g_PrimaryQueue;
 }
 
 void battle::State::display_number(int number, bool small, TextAlignment alignment, Palette* palette, int leading_zeroes)
@@ -690,6 +827,58 @@ void battle::State::display_number(int number, bool small, TextAlignment alignme
 	mat_pop();
 }
 
+void battle::State::display_status(Entity* entity)
+{
+	Palette* ui_palette = get_ui_palette();
+
+	struct StatusEffectIcon
+	{
+		SPRITE_KEY key;
+		int value;
+		int width;
+	};
+
+	int width = 0;
+	vector<StatusEffectIcon> icons = {
+		{ m_Sprites[STATUS_OFFENSE], entity->base_offense, 0 },
+		{ m_Sprites[STATUS_DEFENSE], entity->base_defense, 0 },
+		{ m_Sprites[STATUS_BURN], entity->burn, 0 },
+		{ m_Sprites[STATUS_TOXIN], entity->toxin, 0 }
+	};
+
+	for (int k = icons.size() - 1; k >= 0; --k)
+	{
+		if (icons[k].value <= 0)
+		{
+			icons.erase(icons.begin() + k);
+		}
+		else
+		{
+			icons[k].width = icons[k].value > 99 ? 22 : 17;
+			width += icons[k].width;
+		}
+	}
+
+
+	if (!icons.empty())
+	{
+		int x = (width / 2) + (2 * (icons.size() - 1));
+
+		mat_push();
+		mat_translate(-x, 0.f, 0.f);
+
+		for (auto iter = icons.begin(); iter != icons.end(); ++iter)
+		{
+			m_SpriteSheet->display(iter->key, g_ClearPalette);
+			mat_translate(7.f, -3.f, -0.001f);
+			display_number(iter->value, true, TEXT_LEFT, ui_palette);
+			mat_translate(iter->width - 3, 3.f, 0.f);
+		}
+
+		mat_pop();
+	}
+}
+
 void battle::State::display() const
 {
 	static Application*& app = get_application_settings();
@@ -748,20 +937,33 @@ void battle::State::display() const
 		mat_translate(ally->coordinates.get(0), ally->coordinates.get(1), 0.f);
 		m_SpriteSheet->display(m_Sprites[ALLY_BG], &ally->palette);
 
+		// Display status effects
+		mat_push();
+		mat_translate(ally->dimensions.get(0) / 2, 9.f, -0.001f);
+		display_status(ally);
+		mat_pop();
+
 		// Display health values
 		int cur = ally->cur_health;
 
 		mat_push();
 		mat_translate(22.f, 30.f, -0.001f);
-		mat_scale(ceil(89.f * cur / ally->max_health), 5.f, 1.f);
+		mat_scale(89.f * cur / ally->max_health, 5.f, 1.f);
 		m_SpriteSheet->display(m_Sprites[COLOR_HEALTH], g_ClearPalette);
 		mat_pop();
+		if (cur < ally->max_health && cur > 0)
+		{
+			mat_push();
+			mat_translate(22.f + floor(89.f * cur / ally->max_health), 30.f, -0.0015f);
+			m_SpriteSheet->display(m_Sprites[ALLY_BAR_IN], ui_palette);
+			mat_pop();
+		}
 
-		mat_translate(13.f, 29.f, -0.002f);
+		mat_translate(13.f, 33.f, -0.002f);
 		m_SpriteSheet->display(m_Sprites[ALLY_HEALTH], ui_palette);
 
 		mat_push();
-		mat_translate(104.f, -3.f, -0.001f);
+		mat_translate(104.f, -7.f, -0.001f);
 		display_number(cur, true, TEXT_RIGHT, ui_palette, 3);
 		mat_pop();
 
@@ -769,21 +971,25 @@ void battle::State::display() const
 		cur = ally->cur_shield;
 
 		mat_push();
-		mat_translate(9.f, 19.f, 0.001f);
+		mat_translate(9.f, 15.f, 0.001f);
 		mat_scale(ceil(89.f * cur / ally->max_shield), 5.f, 1.f);
 		m_SpriteSheet->display(m_Sprites[COLOR_SHIELD], g_ClearPalette);
 		mat_pop();
+		if (cur < ally->max_shield && cur > 0)
+		{
+			mat_push();
+			mat_translate(9.f + floor(89.f * cur / ally->max_shield), 15.f, 0.0005f);
+			m_SpriteSheet->display(m_Sprites[ALLY_BAR_IN], ui_palette);
+			mat_pop();
+		}
 
 		mat_translate(0.f, 18.f, 0.f);
 		m_SpriteSheet->display(m_Sprites[ALLY_SHIELD], ui_palette);
 
 		mat_push();
-		mat_translate(104.f, -3.f, -0.001f);
+		mat_translate(104.f, -7.f, -0.001f);
 		display_number(cur, true, TEXT_RIGHT, ui_palette, 3);
 		mat_pop();
-
-		// Display buffs and debuffs
-		// TODO
 
 		mat_pop();
 	}
@@ -793,9 +999,73 @@ void battle::State::display() const
 	{
 		Enemy* enemy = (Enemy*)*iter;
 
+		// Display the enemy sprite
 		mat_push();
 		mat_translate(enemy->coordinates.get(0), enemy->coordinates.get(1), 0.f);
 		enemy->image->display();
+
+		// Display the enemy's Health
+		int health_width = max(enemy->max_health / 25, 1);
+		mat_translate(0.5f * enemy->dimensions.get(0), enemy->dimensions.get(1) + 11, 0.f);
+
+		mat_push();
+		mat_translate(-(health_width / 2), 0.f, 0.f);
+		mat_push();
+		mat_scale(health_width, 1.f, 1.f);
+		m_SpriteSheet->display(m_Sprites[ENEMY_BAR_MID], ui_palette);
+		mat_translate(0.f, 1.f, -0.001f);
+		mat_scale((float)enemy->cur_health / enemy->max_health, 2.f, 1.f);
+		m_SpriteSheet->display(m_Sprites[COLOR_HEALTH], g_ClearPalette);
+		mat_pop();
+		if (enemy->cur_health < enemy->max_health && enemy->cur_health > 0)
+		{
+			mat_push();
+			mat_translate(health_width * enemy->cur_health / enemy->max_health, 1.f, -0.002f);
+			m_SpriteSheet->display(m_Sprites[ENEMY_BAR_IN], ui_palette);
+			mat_pop();
+		}
+
+		mat_translate(-1.f, 0.f, 0.f);
+		m_SpriteSheet->display(m_Sprites[ENEMY_BAR_CAP], ui_palette);
+		mat_translate(1 + health_width, 0.f, 0.f);
+		m_SpriteSheet->display(m_Sprites[ENEMY_BAR_CAP], ui_palette);
+		mat_pop();
+
+		// Display the enemy's Shield
+		mat_translate(0.f, 3.f, 0.f);
+
+		if (enemy->max_shield > 0)
+		{
+			int shield_width = max(enemy->max_shield / 25, 1);
+
+			mat_push();
+			mat_translate(-(shield_width / 2), 0.f, 0.f);
+			mat_push();
+			mat_scale(shield_width, 1.f, 1.f);
+			m_SpriteSheet->display(m_Sprites[ENEMY_BAR_MID], ui_palette);
+			mat_translate(0.f, 1.f, -0.001f);
+			mat_scale((float)enemy->cur_shield / enemy->max_shield, 2.f, 1.f);
+			m_SpriteSheet->display(m_Sprites[COLOR_SHIELD], g_ClearPalette);
+			mat_pop();
+			if (enemy->cur_shield < enemy->max_shield && enemy->cur_shield > 0)
+			{
+				mat_push();
+				mat_translate(shield_width * enemy->cur_shield / enemy->max_shield, 1.f, -0.002f);
+				m_SpriteSheet->display(m_Sprites[ENEMY_BAR_IN], ui_palette);
+				mat_pop();
+			}
+
+			mat_translate(-1.f, 0.f, 0.f);
+			m_SpriteSheet->display(m_Sprites[ENEMY_BAR_CAP], ui_palette);
+			mat_translate(1 + shield_width, 0.f, 0.f);
+			m_SpriteSheet->display(m_Sprites[ENEMY_BAR_CAP], ui_palette);
+			mat_pop();
+		}
+
+		// Display the enemy's status effects
+		mat_translate(0.f, 12.f, 0.f);
+		battle::State::display_status(enemy);
+
 		mat_pop();
 	}
 
