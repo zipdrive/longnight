@@ -98,7 +98,7 @@ int DamageEvent::start()
 				return EVENT_STOP;
 
 			t = target;
-			multiplier = source == NORMAL_DAMAGE ? user->offense - target->defense : 0;
+			multiplier = source == NORMAL_DAMAGE ? user->cur_offense - target->cur_defense : 0;
 
 			auto iter1 = g_BeforeTakeDamageListeners.find(target);
 			if (iter1 != g_BeforeTakeDamageListeners.end())
@@ -118,15 +118,15 @@ int DamageEvent::start()
 		// Reduce user Offense and target Defense if they activated
 		if (source == NORMAL_DAMAGE)
 		{
-			if (user->offense > user->base_offense)
-				--user->offense;
-			else if (user->offense < user->base_offense)
-				++user->offense;
+			if (user->cur_offense > user->base_offense)
+				--user->cur_offense;
+			else if (user->cur_offense < user->base_offense)
+				++user->cur_offense;
 
-			if (target->defense > target->base_defense)
-				--target->defense;
-			else if (target->defense < target->base_defense)
-				++target->defense;
+			if (target->cur_defense > target->base_defense)
+				--target->cur_defense;
+			else if (target->cur_defense < target->base_defense)
+				++target->cur_defense;
 		}
 
 		// Set the damage.
@@ -225,11 +225,20 @@ int InflictStatusEvent::start()
 		int* s;
 		switch (status)
 		{
+		case HEALTH_STATUS:
+			s = &target->cur_health;
+			break;
+		case SHIELD_STATUS:
+			s = &target->cur_shield;
+			break;
+		case TIME_STATUS:
+			s = &target->time;
+			break;
 		case OFFENSE_STATUS:
-			s = &target->base_offense;
+			s = &target->cur_offense;
 			break;
 		case DEFENSE_STATUS:
-			s = &target->base_defense;
+			s = &target->cur_defense;
 			break;
 		case BURN_STATUS:
 			s = &target->burn;
@@ -240,6 +249,13 @@ int InflictStatusEvent::start()
 		}
 
 		*s = max(*s + value, 0);
+
+		if (status == HEALTH_STATUS)
+			*s = min(*s, target->max_health);
+		else if (status == SHIELD_STATUS)
+			*s = min(*s, target->max_shield);
+		else if (status == TIME_STATUS)
+			*s = min(*s, TIMELINE_MAX);
 		
 		// Trigger listeners after the entity is inflicted with a status effect
 		auto iter3 = g_AfterStatusInflictedListeners.find(target);

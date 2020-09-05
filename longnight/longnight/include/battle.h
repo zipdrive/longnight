@@ -3,6 +3,8 @@
 #include "queue.h"
 
 
+#define BASE_DAMAGE			100
+
 #define TIMELINE_MAX		60000
 
 
@@ -12,6 +14,8 @@ namespace battle
 	class Agent;
 
 	struct Party;
+
+	struct Action;
 
 	// An ally or enemy.
 	struct Entity
@@ -34,13 +38,13 @@ namespace battle
 		int base_offense = 0;
 
 		// The entity's current Offense.
-		int offense = 0;
+		int cur_offense = 0;
 
 		// The entity's base Defense, to which it will eventually return.
 		int base_defense = 0;
 
 		// The entity's current Defense.
-		int defense = 0;
+		int cur_defense = 0;
 
 
 		// The entity's current Burn. Decreases Shield, then Health at every tick by the current Burn value.
@@ -56,6 +60,10 @@ namespace battle
 
 		// The entity's allies and enemies.
 		Party* party;
+
+
+		// All available actions.
+		std::vector<Action> actions;
 
 		// The Agent controlling the entity.
 		Agent* agent;
@@ -73,10 +81,10 @@ namespace battle
 
 		/// <summary>Initializes the palette for the entity.</summary>
 		Entity();
-		
+
 		/// <summary>Frees the memory of the entity.</summary>
 		virtual ~Entity() {}
-		
+
 		/// <summary>Checks if an entity is an ally or an enemy of this one.</summary>
 		/// <param name="other">Another entity.</param>
 		/// <returns>True if the entity is an ally, false if it is an enemy.</returns>
@@ -93,7 +101,7 @@ namespace battle
 		std::vector<Entity*> allies;
 	};
 
-	
+
 	// An enemy.
 	struct Enemy : public Entity
 	{
@@ -288,7 +296,7 @@ namespace battle
 
 		int update(int frames_passed);
 	};
-	
+
 	class ShakeEvent : public Event
 	{
 	private:
@@ -421,14 +429,14 @@ namespace battle
 	};
 
 
-	
+
 	enum DamageSource
 	{
 		NORMAL_DAMAGE,
 		BURN_DAMAGE,
 		TOXIN_DAMAGE
 	};
-	
+
 	// An event where an entity takes damage.
 	class DamageEvent : public Event
 	{
@@ -473,6 +481,10 @@ namespace battle
 	// A kind of status effect.
 	enum Status
 	{
+		HEALTH_STATUS,
+		SHIELD_STATUS,
+		TIME_STATUS,
+
 		OFFENSE_STATUS,
 		DEFENSE_STATUS,
 		BURN_STATUS,
@@ -521,15 +533,124 @@ namespace battle
 
 
 
-	class Effect
+	// An effect caused by a usable.
+	struct Effect
 	{
-	public:
 		/// <summary>Generates an event.</summary>
-		virtual Event* generate_event() = 0;
+		/// <param name="user">The user of the usable.</param>
+		/// <param name="target">The target of the effect.</param>
+		virtual Event* generate_event(Entity* user, Entity* target) const = 0;
+	};
+
+	// A set of effects.
+	struct EffectSet
+	{
+		// The animation for when the set of effects activate.
+		Effect* animation = nullptr;
+
+		// Effects of the usable on all targeted entities, in sequential order.
+		std::vector<Effect*> target_effects;
+
+		// Effects of the usable on the user entity, in sequential order.
+		std::vector<Effect*> user_effects;
+
+		/// <summary>Copies a set of effects.</summary>
+		/// <param name="other">The set of effects to copy.</param>
+		EffectSet(EffectSet* other);
+
+		/// <summary>Constructs a set of effects.</summary>
+		/// <param name="animation">The animation for when the set of effects activate.</param>
+		/// <param name="target_effects">Effects of the usable on all targeted entities, in sequential order.</param>
+		/// <param name="user_effects">Effects of the usable on the user entity, in sequential order.</param>
+		EffectSet(Effect* animation, std::vector<Effect*>& target_effects, std::vector<Effect*>& user_effects);
 	};
 
 
+	// An effect that deals damage.
+	struct DamageEffect : public Effect
+	{
+		// The base damage dealt.
+		const int damage;
 
+		/// <summary>Constructs an effect that deals damage.</summary>
+		/// <param name="damage">The amount of damage to inflict.</param>
+		DamageEffect(int damage);
+
+		/// <summary>Generates a damage event.</summary>
+		/// <param name="user">The entity dealing damage.</param>
+		/// <param name="target">The entity taking damage.</param>
+		/// <returns>A DamageEvent.</returns>
+		Event* generate_event(Entity* user, Entity* target) const;
+	};
+
+	// An effect that inflicts a status effect.
+	struct InflictStatusEffect : public Effect
+	{
+		// The status to inflict.
+		const Status status;
+
+		// The amount of status to inflict.
+		const int value;
+
+		/// <summary>Constructs an effect that inflicts a status effect.</summary>
+		/// <param name="status">The status to inflict.</param>
+		/// <param name="value">The amount of status to inflict.</param>
+		InflictStatusEffect(Status status, int value);
+
+		/// <summary>Generates a status infliction event.</summary>
+		/// <param name="user">The entity inflicting the status.</param>
+		/// <param name="target">The entity being inflicted with the status.</param>
+		/// <returns>An InflictStatusEvent.</returns>
+		Event* generate_event(Entity* user, Entity* target) const;
+	};
+
+
+	enum Target
+	{
+		TARGET_SINGLE_ENEMY,
+		TARGET_ALL_ENEMIES,
+		TARGET_RANDOM_ENEMY,
+		TARGET_SINGLE_ALLY,
+		TARGET_ALL_ALLIES,
+		TARGET_SELF
+	};
+	
+	// Something that you can use.
+	struct Usable : public EffectSet
+	{
+		// The default target for the usable.
+		Target default_target;
+	};
+
+	// Something that you can use in battle.
+	struct Action : public EffectSet
+	{
+		// The target for the action.
+		Target target;
+
+		/// <summary>Constructs an action.</summary>
+		/// <param name="target">The target for the action.</param>
+		/// <param name="animation">The animation for when the set of effects activate.</param>
+		/// <param name="target_effects">Effects of the usable on all targeted entities, in sequential order.</param>
+		/// <param name="user_effects">Effects of the usable on the user entity, in sequential order.</param>
+		Action(Target target, Effect* animation, std::vector<Effect*>& target_effects, std::vector<Effect*>& user_effects);
+	};
+
+	// A turn someone takes in battle.
+	struct Turn
+	{
+		// The action used.
+		Action* action;
+
+		// The entity using the usable.
+		Entity* user;
+
+		// The entities targeted by the usable.
+		std::vector<Entity*> targets;
+
+		/// <summary>Queues up the events from the turn.</summary>
+		void enqueue();
+	};
 	
 	
 	struct Agent
@@ -542,6 +663,9 @@ namespace battle
 		/// <summary>Constructs an agent.</summary>
 		/// <param name="self">The entity that the agent represents.</param>
 		Agent(Entity* self);
+
+		/// <summary>Decides what to do and queues up events that do it.</summary>
+		virtual void enqueue() = 0;
 	};
 
 

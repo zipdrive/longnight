@@ -3,6 +3,7 @@
 
 #include "../include/battle.h"
 #include "../include/battleevent.h"
+#include "../include/battleagent.h"
 #include "../include/ui.h"
 
 #include <iostream>
@@ -81,7 +82,9 @@ Enemy::Enemy(string id)
 		cur_shield = max_shield;
 
 		base_offense = load_int(data, "offense");
+		cur_offense = base_offense;
 		base_defense = load_int(data, "defense");
+		cur_defense = base_defense;
 
 		string type = load_string(data, "type");
 		auto sprite_iter = m_EnemySprites.find(type);
@@ -206,7 +209,7 @@ void battle::primary_queue_insert(Event* event, int priority)
 
 
 
-#define TIMELINE_SPEED		3000
+#define TIMELINE_SPEED		9000
 
 TimelineEvent::TimelineEvent(const vector<Entity*>& entities)
 {
@@ -266,7 +269,7 @@ int EntityEvent::start()
 		primary_queue_insert(new TickEvent(m_Entity));
 		primary_queue_insert(new TurnEndEvent(m_Entity));
 
-		// TODO use agent to generate a turn
+		m_Entity->agent->enqueue();
 
 		return EVENT_STOP;
 	}
@@ -515,6 +518,9 @@ Event* DamageEvent::generate_effect()
 }
 
 
+InflictStatusEvent::InflictStatusEvent(Entity* user, Entity* target, Status status, int value) : user(user), target(target), status(status), value(value) {}
+
+
 
 
 DefeatEvent::DefeatEvent(Entity* entity)
@@ -523,6 +529,59 @@ DefeatEvent::DefeatEvent(Entity* entity)
 }
 
 
+
+
+EffectSet::EffectSet(EffectSet* other) : target_effects(other->target_effects), user_effects(other->user_effects)
+{
+	animation = other->animation;
+}
+
+EffectSet::EffectSet(Effect* animation, vector<Effect*>& target_effects, vector<Effect*>& user_effects) : animation(animation), target_effects(target_effects), user_effects(user_effects) {}
+
+
+DamageEffect::DamageEffect(int damage) : damage(damage) {}
+
+Event* DamageEffect::generate_event(Entity* user, Entity* target) const
+{
+	return new DamageEvent(g_PrimaryQueue, user, target, damage, NORMAL_DAMAGE);
+}
+
+
+InflictStatusEffect::InflictStatusEffect(Status status, int value) : status(status), value(value) {}
+
+Event* InflictStatusEffect::generate_event(Entity* user, Entity* target) const
+{
+	return new InflictStatusEvent(user, target, status, value);
+}
+
+
+
+Action::Action(Target target, Effect* animation, vector<Effect*>& target_effects, vector<Effect*>& user_effects) : EffectSet(animation, target_effects, user_effects), target(target) {}
+
+
+void Turn::enqueue()
+{
+	// Queue user effects, in reverse
+	for (auto iter = action->user_effects.rbegin(); iter != action->user_effects.rend(); ++iter)
+	{
+		primary_queue_insert((*iter)->generate_event(user, user));
+	}
+
+	// Queue target effects, in reverse
+	for (auto iter1 = targets.rbegin(); iter1 != targets.rend(); ++iter1)
+	{
+		for (auto iter2 = action->target_effects.rbegin(); iter2 != action->target_effects.rend(); ++iter2)
+		{
+			primary_queue_insert((*iter2)->generate_event(user, *iter1));
+		}
+	}
+
+	// Queue the animation
+	if (action->animation)
+	{
+		primary_queue_insert(action->animation->generate_event(user, targets[0]));
+	}
+}
 
 
 Agent::Agent(Entity* self)
@@ -611,6 +670,7 @@ battle::State::State(const vector<string>& enemies)
 	{
 		Entity* ally = new Entity();
 		g_Allies.allies[k] = ally;
+		ally->party = &g_Allies;
 
 		ally->coordinates = vec2i(ally_x, -1);
 		ally->dimensions = ally_dimensions;
@@ -628,8 +688,7 @@ battle::State::State(const vector<string>& enemies)
 		ally->palette.set_blue_maps_to(vec4f(ui_palette.get(0, 2), ui_palette.get(1, 2), ui_palette.get(2, 2), ui_palette.get(3, 2)));
 
 		// debug TODO remove
-		ally->burn = 162;
-		ally->toxin = 20;
+		ally->agent = new BerserkAgent(ally);
 
 		ally_x += ally_bg->width;
 	}
@@ -645,12 +704,12 @@ battle::State::State(const vector<string>& enemies)
 	{
 		Enemy* enemy = new Enemy(enemies[k]);
 		g_Enemies.allies[k] = enemy;
+		enemy->party = &g_Enemies;
 
 		enemy_width += enemy->image->get_width();
 
 		// debug TODO remove
-		enemy->burn = 162;
-		enemy->toxin = 20;
+		enemy->agent = new BerserkAgent(enemy);
 
 		enemy->time = (rand() % (4 * TIMELINE_MAX / 5)) + (TIMELINE_MAX / 5);
 	}
@@ -806,8 +865,8 @@ void battle::State::display_status(Entity* entity)
 
 	int width = 0;
 	vector<StatusEffectIcon> icons = {
-		{ m_Sprites[STATUS_OFFENSE], entity->base_offense, 0 },
-		{ m_Sprites[STATUS_DEFENSE], entity->base_defense, 0 },
+		{ m_Sprites[STATUS_OFFENSE], entity->cur_offense, 0 },
+		{ m_Sprites[STATUS_DEFENSE], entity->cur_defense, 0 },
 		{ m_Sprites[STATUS_BURN], entity->burn, 0 },
 		{ m_Sprites[STATUS_TOXIN], entity->toxin, 0 }
 	};
