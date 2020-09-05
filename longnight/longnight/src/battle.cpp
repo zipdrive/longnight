@@ -499,56 +499,22 @@ void NumberEvent::Animation::display() const
 
 
 
-DamageEvent::DamageEvent(Queue* queue, Entity* target, int damage, DamageSource source)
+DamageEvent::DamageEvent(Queue* queue, Entity* user, Entity* target, int damage, DamageSource source) : user(user), target(target), source(source), damage(damage)
 {
 	m_Queue = queue;
-
-	m_Target = target;
-	m_Damage = damage;
-	m_Source = source;
 }
 
 Event* DamageEvent::generate_effect()
 {
-	if (m_Source == NORMAL_DAMAGE)
-		return new ShakeEvent(m_Target->coordinates, vec2i(3, 1), 0.25f);
-	else if (m_Source == BURN_DAMAGE)
-		return new FlashEvent(&m_Target->palette, vec3i(220, 28, 28), 1.f, 0.125f, 0.f);
-	else if (m_Source == TOXIN_DAMAGE)
-		return new FlashEvent(&m_Target->palette, vec3i(56, 164, 26), 1.f, 0.125f, 0.f);
+	if (source == NORMAL_DAMAGE)
+		return new ShakeEvent(target->coordinates, vec2i(3, 1), 0.25f);
+	else if (source == BURN_DAMAGE)
+		return new FlashEvent(&target->palette, vec3i(220, 28, 28), 1.f, 0.125f, 0.f);
+	else if (source == TOXIN_DAMAGE)
+		return new FlashEvent(&target->palette, vec3i(56, 164, 26), 1.f, 0.125f, 0.f);
 }
 
-int DamageEvent::start()
-{
-	if (m_Target->cur_health > 0)
-	{
-		int dh = m_Damage;
 
-		// Damage the target's Shield first, if the target has any and the damage isn't from Toxin
-		if (m_Target->cur_shield > 0 && m_Source != TOXIN_DAMAGE)
-		{
-			int ds = min(m_Target->cur_shield, m_Damage);
-
-			m_Target->cur_shield -= ds;
-			dh -= ds;
-		}
-
-		// Damage the target's Health
-		m_Target->cur_health -= min(m_Target->cur_health, dh);
-
-		// Queue animations for the damage
-		m_Queue->insert(new NumberEvent(m_Damage, m_Target->coordinates + vec2i(m_Target->dimensions.get(0) / 2, m_Target->dimensions.get(1) / 2)), INT_MIN);
-		m_Queue->insert(generate_effect(), INT_MIN + 1);
-		m_Queue->insert(new DelayEvent(m_Source == NORMAL_DAMAGE ? 0.35f : 0.15f), INT_MIN + 2);
-
-		if (m_Target->cur_health <= 0)
-		{
-			m_Queue->insert(new DefeatEvent(m_Target), INT_MIN + 3);
-		}
-	}
-
-	return EVENT_STOP;
-}
 
 
 DefeatEvent::DefeatEvent(Entity* entity)

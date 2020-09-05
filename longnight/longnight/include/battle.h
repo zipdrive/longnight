@@ -30,11 +30,17 @@ namespace battle
 		int max_shield;
 
 
-		// The entity's base Offense.
+		// The entity's base Offense, to which it will eventually return.
 		int base_offense = 0;
 
-		// The entity's base Defense.
+		// The entity's current Offense.
+		int offense = 0;
+
+		// The entity's base Defense, to which it will eventually return.
 		int base_defense = 0;
+
+		// The entity's current Defense.
+		int defense = 0;
 
 
 		// The entity's current Burn. Decreases Shield, then Health at every tick by the current Burn value.
@@ -430,22 +436,74 @@ namespace battle
 		// The queue that this event has been put in.
 		Queue* m_Queue;
 
-		// The entity taking damage.
-		Entity* m_Target;
-
-		// The amount of damage taken.
-		int m_Damage;
-
-		// The source of the damage.
-		DamageSource m_Source;
-
 		/// <summary>Generates an event that animates the target taking damage.</summary>
 		/// <returns>A pointer to an Event allocated with new.</returns>
 		Event* generate_effect();
 
 	public:
-		DamageEvent(Queue* queue, Entity* target, int damage, DamageSource source);
+		// The source of the damage.
+		DamageSource source;
 
+		// The entity dealing damage.
+		Entity* user;
+
+		// The entity taking damage.
+		Entity* target;
+
+		// The base damage dealt.
+		int damage;
+
+		// The multiplier for the damage.
+		int multiplier;
+
+		/// <summary>Constructs an event where an entity takes damage.</summary>
+		/// <param name="queue">The queue to put the animation events into.</param>
+		/// <param name="user">The entity dealing damage.</param>
+		/// <param name="target">The entity taking damage.</param>
+		/// <param name="damage">The amount of base damage to deal.</param>
+		/// <param name="source">The type of damage.</param>
+		DamageEvent(Queue* queue, Entity* user, Entity* target, int damage, DamageSource source);
+
+		/// <summary>Deals damage to the target entity.</summary>
+		/// <returns>EVENT_STOP.</returns>
+		int start();
+	};
+
+
+	// A kind of status effect.
+	enum Status
+	{
+		OFFENSE_STATUS,
+		DEFENSE_STATUS,
+		BURN_STATUS,
+		TOXIN_STATUS
+	};
+
+	// An event that inflicts a status effect.
+	class InflictStatusEvent : public Event
+	{
+	public:
+		// The entity inflicting Burn.
+		Entity* user;
+
+		// The entity getting inflicted with Burn.
+		Entity* target;
+
+		// The status effect.
+		Status status;
+
+		// The amount of status to inflict.
+		int value;
+
+		/// <summary>Constructs an event where an entity is inflicted with a status effect.</summary>
+		/// <param name="user">The entity inflicting the status effect.</param>
+		/// <param name="target">The entity being inflicted with the status effect.</param>
+		/// <param name="status">The status effect to inflict.</param>
+		/// <param name="value">The amount of status effect to inflict.</param>
+		InflictStatusEvent(Entity* user, Entity* target, Status status, int value);
+
+		/// <summary>Inflicts the status effect on the target entity.</summary>
+		/// <returns>EVENT_STOP.</returns>
 		int start();
 	};
 
@@ -458,6 +516,16 @@ namespace battle
 
 	public:
 		DefeatEvent(Entity* entity);
+	};
+
+
+
+
+	class Effect
+	{
+	public:
+		/// <summary>Generates an event.</summary>
+		virtual Event* generate_event() = 0;
 	};
 
 
