@@ -5,7 +5,7 @@
 
 onion::SinglePalette* g_UIPalette = nullptr;
 
-onion::Palette* get_ui_palette()
+onion::SinglePalette* get_ui_palette()
 {
 	return g_UIPalette;
 }

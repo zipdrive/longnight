@@ -17,7 +17,13 @@ BerserkAgent::BerserkAgent(Entity* self) : Agent(self) {}
 void BerserkAgent::enqueue()
 {
 	vector<Entity*>& enemies = m_Self->party->enemies->allies;
+	Entity* target = nullptr;
+	do 
+	{
+		target = enemies[rand() % enemies.size()];
+	} 
+	while (target->cur_health == 0);
 
-	Turn turn = { &m_BerserkAction, m_Self, { enemies[rand() % enemies.size()] } };
+	Turn turn = { &m_BerserkAction, m_Self, { target } };
 	turn.enqueue();
 }

@@ -3,7 +3,7 @@
 #include "queue.h"
 
 
-#define BASE_DAMAGE			100
+#define BASE_DAMAGE			500
 
 #define TIMELINE_MAX		60000
 
@@ -89,6 +89,9 @@ namespace battle
 		/// <param name="other">Another entity.</param>
 		/// <returns>True if the entity is an ally, false if it is an enemy.</returns>
 		bool is_ally(Entity* other);
+
+		/// <summary>Animates the entity's incapacitation.</summary>
+		virtual void defeat() = 0;
 	};
 
 	// A collection of entities who are allied.
@@ -102,6 +105,16 @@ namespace battle
 	};
 
 
+	// A player character.
+	struct Ally : public Entity
+	{
+		/// <summary>Constructs an entity primarily controlled by a character in battle.</summary>
+		Ally();
+
+		/// <summary>Animates the ally's incapacitation.</summary>
+		void defeat();
+	};
+	
 	// An enemy.
 	struct Enemy : public Entity
 	{
@@ -130,6 +143,9 @@ namespace battle
 
 		/// <summary>Frees the memory of the enemy graphic.</summary>
 		~Enemy();
+
+		/// <summary>Animates the enemy's defeat.</summary>
+		void defeat();
 	};
 
 
@@ -324,6 +340,48 @@ namespace battle
 		int update(int frames_passed);
 	};
 
+	// An event that recolors a palette.
+	class RecolorEvent : public Event
+	{
+	private:
+		// The palette to flash a different color.
+		onion::SinglePalette* m_Palette;
+
+		// The change per frame in the color RED maps to.
+		vec4f m_Red;
+
+		// The change per frame in the color GREEN maps to.
+		vec4f m_Green;
+
+		// The change per frame in the color BLUE maps to.
+		vec4f m_Blue;
+
+		// How long is left in the recolor.
+		int m_Duration;
+
+		/// <summary>Shifts the palette mappings.</summary>
+		/// <param name="frames">The number of frames to shift the palette mappings by. Positive numbers shift towards the flash color, negative numbers shift away from it.</param>
+		void change(int frames);
+
+	public:
+		/// <summary>Constructs an event that recolors a palette.</summary>
+		/// <param name="palette">The palette to flash a different color.</param>
+		/// <param name="color">The color of the flash.</param>
+		/// <param name="filter">0 if the flash filters the sprite through a color, 1 to render it as a solid block of color.</param>
+		/// <param name="transition_duration">The duration of the flash's transition, in seconds.</param>
+		/// <param name="hold_duration">The duration to hold the flash, in seconds.</param>
+		RecolorEvent(onion::SinglePalette* palette, const vec3i& color, float filter, float transition_duration);
+
+		/// <summary>Initializes the flash parameters.</summary>
+		/// <returns>EVENT_CONTINUE.</returns>
+		int start();
+
+		/// <summary>Updates the flash.</summary>
+		/// <param name="frames_passed">The number of frames that have passed since the last update.</param>
+		/// <returns>EVENT_STOP if the flash is done, EVENT_CONTINUE otherwise.</returns>
+		int update(int frames_passed);
+	};
+
 	class FlashEvent : public Event
 	{
 	private:
@@ -356,7 +414,7 @@ namespace battle
 		void change(int frames);
 
 	public:
-		/// <summary></summary>
+		/// <summary>Constructs an event that flashes a palette to a different color.</summary>
 		/// <param name="palette">The palette to flash a different color.</param>
 		/// <param name="color">The color of the flash.</param>
 		/// <param name="filter">0 if the flash filters the sprite through a color, 1 to render it as a solid block of color.</param>
@@ -528,6 +586,25 @@ namespace battle
 
 	public:
 		DefeatEvent(Entity* entity);
+
+		int start();
+	};
+
+	// An event that ejects an entity from the battle permanently. Should only be used on defeated enemies.
+	class EjectEvent : public Event
+	{
+	private:
+		// The entity to be ejected.
+		Entity* m_Entity;
+
+	public:
+		/// <summary>Constructs an event that ejects an entity from the battle.</summary>
+		/// <param name="entity">The entity to be ejected.</param>
+		EjectEvent(Entity* entity);
+
+		/// <summary>Ejects the entity from the battle.</summary>
+		/// <returns>EVENT_STOP.</returns>
+		int start();
 	};
 
 

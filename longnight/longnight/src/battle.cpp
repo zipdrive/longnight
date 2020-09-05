@@ -35,6 +35,48 @@ bool Entity::is_ally(Entity* other)
 }
 
 
+Ally::Ally()
+{
+	// Set the ally's party
+	party = &g_Allies;
+
+	// Set up the palette
+	SinglePalette* ui_palette = get_ui_palette();
+	vec4f ui_color;
+
+	ui_palette->get_red_maps_to(ui_color);
+	palette.set_red_maps_to(ui_color);
+
+	ui_palette->get_green_maps_to(ui_color);
+	palette.set_green_maps_to(ui_color);
+
+	ui_palette->get_blue_maps_to(ui_color);
+	palette.set_blue_maps_to(ui_color);
+}
+
+void Ally::defeat()
+{
+	// Reset all status effects to their baseline
+	cur_offense = 0;
+	cur_defense = 0;
+	burn = 0;
+	toxin = 0;
+
+	// Change the palette of the background to show that the ally is incapacitated
+	palette.set_red_maps_to(vec4i(239, 195, 195, 0));
+	palette.set_green_maps_to(vec4i(213, 110, 110, 0));
+
+	// Check if all allies have been defeated. If so, the player loses the battle.
+	for (auto iter = party->allies.begin(); iter != party->allies.end(); ++iter)
+	{
+		if ((*iter)->cur_health > 0)
+			return; // Quits the function if any ally is not incapacitated, so the last section isn't reached
+	}
+
+	// TODO game over
+}
+
+
 unordered_map<string, unordered_map<string, string>*> Enemy::m_EnemyData{};
 unordered_map<string, SpriteSheet*> Enemy::m_EnemySprites{};
 
@@ -70,6 +112,9 @@ Enemy::Enemy(string id)
 		}
 	}
 
+	// Set the enemy's party
+	party = &g_Enemies;
+
 	// Load the data for this particular enemy.
 	auto iter = m_EnemyData.find(id);
 	if (iter != m_EnemyData.end())
@@ -82,9 +127,9 @@ Enemy::Enemy(string id)
 		cur_shield = max_shield;
 
 		base_offense = load_int(data, "offense");
-		cur_offense = base_offense;
+		cur_offense = 0;
 		base_defense = load_int(data, "defense");
-		cur_defense = base_defense;
+		cur_defense = 0;
 
 		string type = load_string(data, "type");
 		auto sprite_iter = m_EnemySprites.find(type);
@@ -110,6 +155,16 @@ Enemy::Enemy(string id)
 Enemy::~Enemy()
 {
 	delete image;
+}
+
+void Enemy::defeat()
+{
+	// Enqueue the events that animate the enemy's defeat in reverse (using the priority queue as a stack)
+	primary_queue_insert(new EjectEvent(this));
+	primary_queue_insert(new DelayEvent(0.1f));
+	primary_queue_insert(new RecolorEvent(&palette, vec3i(), 1.f, 0.01f));
+	primary_queue_insert(new DelayEvent(0.1f));
+	primary_queue_insert(new RecolorEvent(&palette, vec3i(255, 255, 255), 1.f, 0.25f));
 }
 
 
@@ -266,10 +321,19 @@ int EntityEvent::start()
 	// Check if the entity has an Agent to decide what to do
 	if (m_Entity->agent)
 	{
+		// We're enqueueing everything in the reverse order that it will happen (so basically, using our priority queue as a stack)
+
+		// Queue the listener triggering events
 		primary_queue_insert(new TickEvent(m_Entity));
 		primary_queue_insert(new TurnEndEvent(m_Entity));
 
+		// Queue the entity's action
 		m_Entity->agent->enqueue();
+
+		// Queue making the entity flash to indicate who is acting
+		float filter = dynamic_cast<Enemy*>(m_Entity) == nullptr ? 1.f : 0.5f;
+		primary_queue_insert(new FlashEvent(&m_Entity->palette, vec3i(255, 255, 255), filter, 0.1f, 0.f));
+		primary_queue_insert(new FlashEvent(&m_Entity->palette, vec3i(255, 255, 255), filter, 0.1f, 0.f));
 
 		return EVENT_STOP;
 	}
@@ -353,6 +417,58 @@ int ShakeEvent::update(int frames_passed)
 }
 
 
+RecolorEvent::RecolorEvent(SinglePalette* palette, const vec3i& color, float filter, float transition_duration)
+{
+	m_Palette = palette;
+
+	m_Red = vec4f(color.get(0) / 255.f, filter * color.get(1) / 255.f, filter * color.get(2) / 255.f, 0.f);
+	m_Green = vec4f(filter * color.get(0) / 255.f, color.get(1) / 255.f, filter * color.get(2) / 255.f, 0.f);
+	m_Blue = vec4f(filter * color.get(0) / 255.f, filter * color.get(1) / 255.f, color.get(2) / 255.f, 0.f);
+
+	m_Duration = ceil(transition_duration * UpdateEvent::frames_per_second);
+}
+
+void RecolorEvent::change(int frames)
+{
+	vec4f prior;
+
+	m_Palette->get_red_maps_to(prior);
+	m_Palette->set_red_maps_to(vec4f(prior + (frames * m_Red)));
+
+	m_Palette->get_green_maps_to(prior);
+	m_Palette->set_green_maps_to(vec4f(prior + (frames * m_Green)));
+
+	m_Palette->get_blue_maps_to(prior);
+	m_Palette->set_blue_maps_to(vec4f(prior + (frames * m_Blue)));
+}
+
+int RecolorEvent::start()
+{
+	vec4f prior;
+
+	m_Palette->get_red_maps_to(prior);
+	m_Red = vec4f((1.f / m_Duration) * (m_Red - prior));
+
+	m_Palette->get_green_maps_to(prior);
+	m_Green = vec4f((1.f / m_Duration) * (m_Green - prior));
+
+	m_Palette->get_blue_maps_to(prior);
+	m_Blue = vec4f((1.f / m_Duration) * (m_Blue - prior));
+
+	return EVENT_CONTINUE;
+}
+
+int RecolorEvent::update(int frames_passed)
+{
+	int frames = min(m_Duration, frames_passed);
+
+	m_Duration -= frames;
+	change(frames);
+
+	return m_Duration <= 0 ? EVENT_STOP : EVENT_CONTINUE;
+}
+
+
 FlashEvent::FlashEvent(SinglePalette* palette, const vec3i& color, float filter, float transition_duration, float hold_duration)
 {
 	m_Palette = palette;
@@ -361,27 +477,39 @@ FlashEvent::FlashEvent(SinglePalette* palette, const vec3i& color, float filter,
 	m_Green = vec4f(filter * color.get(0) / 255.f, color.get(1) / 255.f, filter * color.get(2) / 255.f, 0.f);
 	m_Blue = vec4f(filter * color.get(0) / 255.f, filter * color.get(1) / 255.f, color.get(2) / 255.f, 0.f);
 
-	m_RiseDuration = round(transition_duration * UpdateEvent::frames_per_second);
+	m_RiseDuration = ceil(transition_duration * UpdateEvent::frames_per_second);
 	m_FallDuration = m_RiseDuration;
 	m_ApexDuration = round(hold_duration * UpdateEvent::frames_per_second);
 }
 
 void FlashEvent::change(int frames)
 {
-	PALETTE_MATRIX m = m_Palette->get_red_palette_matrix();
+	vec4f prior;
 
-	m_Palette->set_red_maps_to(vec4f(vec4f(m.get(0, 0), m.get(1, 0), m.get(2, 0), m.get(3, 0)) + (frames * m_Red)));
-	m_Palette->set_green_maps_to(vec4f(vec4f(m.get(0, 1), m.get(1, 1), m.get(2, 1), m.get(3, 1)) + (frames * m_Green)));
-	m_Palette->set_blue_maps_to(vec4f(vec4f(m.get(0, 2), m.get(1, 2), m.get(2, 2), m.get(3, 2)) + (frames * m_Blue)));
+	m_Palette->get_red_maps_to(prior);
+	m_Palette->set_red_maps_to(vec4f(prior + (frames * m_Red)));
+
+	m_Palette->get_green_maps_to(prior);
+	m_Palette->set_green_maps_to(vec4f(prior + (frames * m_Green)));
+
+	m_Palette->get_blue_maps_to(prior);
+	m_Palette->set_blue_maps_to(vec4f(prior + (frames * m_Blue)));
 }
 
 int FlashEvent::start()
 {
 	m_BasePaletteMatrix = m_Palette->get_red_palette_matrix();
 
-	m_Red = vec4f((1.f / m_RiseDuration) * (m_Red - vec4f(m_BasePaletteMatrix.get(0, 0), m_BasePaletteMatrix.get(1, 0), m_BasePaletteMatrix.get(2, 0), m_BasePaletteMatrix.get(3, 0))));
-	m_Green = vec4f((1.f / m_RiseDuration) * (m_Green - vec4f(m_BasePaletteMatrix.get(0, 1), m_BasePaletteMatrix.get(1, 1), m_BasePaletteMatrix.get(2, 1), m_BasePaletteMatrix.get(3, 1))));
-	m_Blue = vec4f((1.f / m_RiseDuration) * (m_Blue - vec4f(m_BasePaletteMatrix.get(0, 2), m_BasePaletteMatrix.get(1, 2), m_BasePaletteMatrix.get(2, 2), m_BasePaletteMatrix.get(3, 2))));
+	vec4f prior;
+
+	m_Palette->get_red_maps_to(prior);
+	m_Red = vec4f((1.f / m_RiseDuration) * (m_Red - prior));
+
+	m_Palette->get_green_maps_to(prior);
+	m_Green = vec4f((1.f / m_RiseDuration) * (m_Green - prior));
+
+	m_Palette->get_blue_maps_to(prior);
+	m_Blue = vec4f((1.f / m_RiseDuration) * (m_Blue - prior));
 
 	return EVENT_CONTINUE;
 }
@@ -528,6 +656,39 @@ DefeatEvent::DefeatEvent(Entity* entity)
 	m_Entity = entity;
 }
 
+int DefeatEvent::start()
+{
+	m_Entity->defeat();
+	return EVENT_STOP;
+}
+
+EjectEvent::EjectEvent(Entity* entity)
+{
+	m_Entity = entity;
+}
+
+int EjectEvent::start()
+{
+	vector<Entity*>& ally_vec = m_Entity->party->allies;
+	for (auto iter = ally_vec.begin(); iter != ally_vec.end(); ++iter)
+	{
+		if (*iter == m_Entity)
+		{
+			ally_vec.erase(iter);
+			break;
+		}
+	}
+	delete m_Entity;
+
+	// Check if all enemies have been defeated. If so, end the battle.
+	if (ally_vec.empty())
+	{
+		// TODO player wins
+	}
+
+	return EVENT_STOP;
+}
+
 
 
 
@@ -668,9 +829,8 @@ battle::State::State(const vector<string>& enemies)
 
 	for (int k = 2; k >= 0; --k)
 	{
-		Entity* ally = new Entity();
+		Entity* ally = new Ally();
 		g_Allies.allies[k] = ally;
-		ally->party = &g_Allies;
 
 		ally->coordinates = vec2i(ally_x, -1);
 		ally->dimensions = ally_dimensions;
@@ -704,7 +864,6 @@ battle::State::State(const vector<string>& enemies)
 	{
 		Enemy* enemy = new Enemy(enemies[k]);
 		g_Enemies.allies[k] = enemy;
-		enemy->party = &g_Enemies;
 
 		enemy_width += enemy->image->get_width();
 

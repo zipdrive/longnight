@@ -132,12 +132,12 @@ int DamageEvent::start()
 		// Set the damage.
 		if (multiplier > 0)
 		{
-			damage = damage * multiplier / 10;
+			damage = damage * (10 + multiplier) / 10;
 			multiplier = 0;
 		}
 		else if (multiplier < 0)
 		{
-			damage = damage * 10 / -multiplier;
+			damage = damage * 10 / (10 - multiplier);
 			multiplier = 0;
 		}
 
@@ -246,6 +246,11 @@ int InflictStatusEvent::start()
 		case TOXIN_STATUS:
 			s = &target->toxin;
 			break;
+		}
+
+		if (status == HEALTH_STATUS && *s <= 0 && value > 0)
+		{
+			// TODO restore original palette
 		}
 
 		*s = max(*s + value, 0);
