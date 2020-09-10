@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <unordered_set>
+#include <regex>
 
 #include "../include/battle.h"
 #include "../include/battleevent.h"
 #include "../include/battleagent.h"
 #include "../include/ui.h"
+#include "../include/party.h"
 
 #include <iostream>
 
@@ -24,6 +26,12 @@ Party g_Enemies = { nullptr, vector<Entity*>() };
 
 Entity::Entity() : palette(vec4i(255, 0, 0, 0), vec4i(0, 255, 0, 0), vec4i(0, 0, 255, 0)) {}
 
+Entity::~Entity()
+{
+	for (auto iter = usables.begin(); iter != usables.end(); ++iter)
+		delete *iter;
+}
+
 bool Entity::is_ally(Entity* other)
 {
 	for (auto iter = party->allies.begin(); iter != party->allies.end(); ++iter)
@@ -35,10 +43,13 @@ bool Entity::is_ally(Entity* other)
 }
 
 
-Ally::Ally()
+Ally::Ally(overworld::Ally& ally)
 {
 	// Set the ally's party
 	party = &g_Allies;
+
+	// Set the agent
+	agent = nullptr;
 
 	// Set up the palette
 	SinglePalette* ui_palette = get_ui_palette();
@@ -52,6 +63,26 @@ Ally::Ally()
 
 	ui_palette->get_blue_maps_to(ui_color);
 	palette.set_blue_maps_to(ui_color);
+
+	// Set values
+	cur_health = ally.cur_health;
+	max_health = ally.max_health;
+
+	cur_shield = 0;
+	max_shield = 999;
+
+	// Set up the usables
+	for (auto iter = ally.items.begin(); iter != ally.items.end(); ++iter)
+	{
+		if (*iter)
+			usables.push_back((*iter)->generate());
+	}
+}
+
+Ally::~Ally()
+{
+	if (cursor)
+		delete cursor;
 }
 
 void Ally::defeat()
@@ -148,7 +179,22 @@ Enemy::Enemy(string id)
 			image = new StaticSpriteGraphic(sheet, Sprite::get_sprite("battle enemy " + id), &palette);
 		}
 
-		dimensions = vec2i(image->get_width(), image->get_height());
+		if (image)
+			dimensions = vec2i(image->get_width(), image->get_height());
+
+		// Load items
+		string items = load_string(data, "items");
+		regex comma("(.*),\\s*(.*)");
+		smatch match;
+		while (regex_match(items, match, comma))
+		{
+			if (overworld::Item* item = overworld::Item::get_item(match[1].str()))
+				usables.push_back(item->generate());
+
+			items = match[2].str();
+		}
+		if (overworld::Item* item = overworld::Item::get_item(items))
+			usables.push_back(item->generate());
 	}
 }
 
@@ -308,9 +354,110 @@ int TimelineEvent::update(int frames_passed)
 }
 
 
+EntityEvent* EntityEvent::m_ActiveEntity{ nullptr };
+
+EntityEvent::TS::TS(Target target_type, int target_index) : target_type(target_type), target_index(target_index) {}
+
 EntityEvent::EntityEvent(Entity* entity)
 {
 	m_Entity = entity;
+}
+
+#define USABLE_ANGLE	0.4833219467f
+
+void EntityEvent::__display() const
+{
+	// Display the cursors
+	int bob = (m_CursorBob * 4 / UpdateEvent::frames_per_second) % 4;
+	bob = bob > 2 ? 2 - bob : bob - 2;
+
+	for (auto iter = m_Cursors.begin(); iter != m_Cursors.end(); ++iter)
+	{
+		mat_push();
+		mat_translate(iter->get(0) + bob, iter->get(1) + bob, -0.5f);
+		((Ally*)m_Entity)->cursor->display();
+		mat_pop();
+	}
+
+	// Display the active entity
+	mat_push();
+	mat_translate(m_Entity->coordinates.get(0) + (m_Entity->dimensions.get(0) / 2), m_Entity->coordinates.get(1) + m_Entity->dimensions.get(1), 0.f);
+	
+	// Display all usables
+	float angle = m_UsableAngle;
+	for (auto iter = m_Entity->usables.begin(); iter != m_Entity->usables.end(); ++iter)
+	{
+		if (Graphic* icon = (*iter)->icon)
+		{
+			mat_push();
+			mat_scale(1.25f, 1.f, 1.f);
+			mat_rotatez(angle);
+			mat_translate(0.f, 37.f, 0.f);
+			mat_rotatez(-angle);
+			mat_scale(0.8f, 1.f, 1.f);
+			mat_translate(-icon->get_width() / 2, -icon->get_height() / 2, 0.f);
+			(*iter)->icon->display();
+			mat_pop();
+		}
+
+		angle -= USABLE_ANGLE;
+	}
+	mat_pop();
+
+	// TODO
+}
+
+void EntityEvent::display()
+{
+	if (m_ActiveEntity)
+		m_ActiveEntity->__display();
+}
+
+void EntityEvent::hover_cursor(Entity* entity)
+{
+	m_Cursors.push_back(entity->coordinates + vec2i(entity->dimensions.get(0) / 2, entity->dimensions.get(1) / 2));
+}
+
+void EntityEvent::reset_cursor()
+{
+	// Clear the existing cursors
+	m_Cursors.clear();
+
+	// Set the new cursors
+	if (m_Turn.usable != nullptr && m_Selecting != m_SelectSequence.end())
+	{
+		switch (m_Selecting->target_type)
+		{
+		case TARGET_ALL_ENEMIES:
+		case TARGET_RANDOM_ENEMY:
+		{
+			for (auto iter = m_Entity->party->enemies->allies.begin(); iter != m_Entity->party->enemies->allies.end(); ++iter)
+				hover_cursor(*iter);
+			break;
+		}
+		case TARGET_SINGLE_ENEMY:
+		{
+			hover_cursor(m_Entity->party->enemies->allies[m_SelectedTarget]);
+			break;
+		}
+		case TARGET_ALL_ALLIES:
+		{
+			for (auto iter = m_Entity->party->allies.begin(); iter != m_Entity->party->allies.end(); ++iter)
+				hover_cursor(*iter);
+			break;
+		}
+		case TARGET_SINGLE_ALLY:
+		{
+			hover_cursor(m_Entity->party->allies[m_SelectedTarget]);
+			break;
+		}
+		case TARGET_SELF:
+		{
+			hover_cursor(m_Entity);
+			break;
+		}
+		}
+	}
 }
 
 int EntityEvent::start()
@@ -328,7 +475,8 @@ int EntityEvent::start()
 		primary_queue_insert(new TurnEndEvent(m_Entity));
 
 		// Queue the entity's action
-		m_Entity->agent->enqueue();
+		m_Entity->agent->decide(m_Turn);
+		m_Turn.enqueue();
 
 		// Queue making the entity flash to indicate who is acting
 		float filter = dynamic_cast<Enemy*>(m_Entity) == nullptr ? 1.f : 0.5f;
@@ -339,6 +487,18 @@ int EntityEvent::start()
 	}
 	else
 	{
+		// Set as the active entity event
+		m_ActiveEntity = this;
+
+		// Set the initial data for the turn
+		m_Turn.usable = nullptr;
+		m_Turn.user = m_Entity;
+		m_SelectedUsable = 0;
+		m_SelectedTarget = 0;
+
+		m_UsableAngle = 0.f;
+		m_TargetUsableAngle = 0.f;
+
 		// Use keyboard input to decide what to do
 		unfreeze();
 	}
@@ -346,17 +506,178 @@ int EntityEvent::start()
 	return EVENT_CONTINUE;
 }
 
+#define USABLE_ANGLE_SPEED (USABLE_ANGLE * 4.f)
+
 int EntityEvent::update(int frames_passed)
 {
-	// TODO
+	if (m_UsableAngle < m_TargetUsableAngle)
+	{
+		m_UsableAngle += frames_passed * USABLE_ANGLE_SPEED / UpdateEvent::frames_per_second;
+		
+		if (m_UsableAngle >= m_TargetUsableAngle) m_UsableAngle = m_TargetUsableAngle;
+	}
+	else if (m_UsableAngle > m_TargetUsableAngle)
+	{
+		m_UsableAngle -= frames_passed * USABLE_ANGLE_SPEED / UpdateEvent::frames_per_second;
 
-	primary_queue_insert(new TickEvent(m_Entity));
-	primary_queue_insert(new TurnEndEvent(m_Entity));
-	return EVENT_STOP;
+		if (m_UsableAngle <= m_TargetUsableAngle) m_UsableAngle = m_TargetUsableAngle;
+	}
+
+	m_CursorBob += frames_passed;
+
+	if (m_Turn.usable != nullptr && m_Selecting == m_SelectSequence.end())
+	{
+		// Queue triggering listeners
+		primary_queue_insert(new TickEvent(m_Entity));
+		primary_queue_insert(new TurnEndEvent(m_Entity));
+
+		// Queue the selected usable with the selected targets
+		m_Turn.enqueue();
+
+		// Unset as the active entity event
+		m_ActiveEntity = nullptr;
+
+		return EVENT_STOP;
+	}
+
+	return EVENT_CONTINUE;
 }
 
 int EntityEvent::trigger(const KeyEvent& event_data)
 {
+	if (event_data.pressed) // If the key was pressed and not released/held down
+	{
+		if (m_Turn.usable) // Selecting targets
+		{
+			switch (event_data.control)
+			{
+			case KEY_LEFT:
+			case KEY_RIGHT:
+			{
+				int r = event_data.control == KEY_LEFT ? -1 : 1;
+				int s = m_Selecting->target_type == TARGET_SINGLE_ENEMY ? m_Entity->party->enemies->allies.size() : m_Entity->party->allies.size();
+
+				if (m_Selecting->target_type == TARGET_SINGLE_ENEMY || m_Selecting->target_type == TARGET_SINGLE_ALLY)
+				{
+					m_SelectedTarget = (m_SelectedTarget + r + s) % s;
+					reset_cursor();
+				}
+
+				break;
+			}
+			case KEY_SELECT:
+			{
+				if (m_Selecting->target_index >= 0)
+				{
+					if (m_Selecting->target_type == TARGET_SINGLE_ENEMY)
+					{
+						m_Turn.targets[m_Selecting->target_index] = m_Entity->party->enemies->allies[m_SelectedTarget];
+					}
+					else
+					{
+						m_Turn.targets[m_Selecting->target_index] = m_Entity->party->allies[m_SelectedTarget];
+					}
+				}
+
+				++m_Selecting;
+				reset_cursor();
+				break;
+			}
+			case KEY_CANCEL:
+			{
+				if (m_Selecting == m_SelectSequence.begin())
+				{
+					m_Turn.usable = nullptr;
+				}
+				else
+				{
+					--m_Selecting;
+				}
+
+				reset_cursor();
+				break;
+			}
+			}
+		}
+		else // Selecting what usable to use
+		{
+			switch (event_data.control)
+			{
+			case KEY_LEFT:
+			{
+				m_SelectedUsable = max(0, m_SelectedUsable - 1);
+				m_TargetUsableAngle = USABLE_ANGLE * m_SelectedUsable;
+				break;
+			}
+			case KEY_RIGHT:
+			{
+				int s = m_Entity->usables.size() - 1;
+				m_SelectedUsable = min(m_SelectedUsable + 1, s);
+				m_TargetUsableAngle = USABLE_ANGLE * m_SelectedUsable;
+				break;
+			}
+			case KEY_SELECT:
+			{
+				// Set which usable to use
+				m_Turn.usable = m_Entity->usables[m_SelectedUsable];
+
+				// Set the sequence of targets to select
+				m_SelectSequence.clear();
+				m_Turn.targets.clear();
+				for (int k = 0; k < m_Turn.usable->targets.size(); ++k)
+				{
+					Target t = m_Turn.usable->targets[k].target;
+
+					if (t == TARGET_SINGLE_ALLY || t == TARGET_SINGLE_ENEMY)
+					{
+						m_Turn.targets.push_back(nullptr);
+						m_SelectSequence.push_back(EntityEvent::TS(t, m_Turn.targets.size() - 1));
+					}
+					else
+					{
+						if (t == TARGET_RANDOM_ENEMY)
+						{
+							vector<Entity*>& opts = m_Entity->party->enemies->allies;
+							m_Turn.targets.push_back(opts[rand() % opts.size()]);
+						}
+						
+						m_SelectSequence.push_back(EntityEvent::TS(t, -1));
+					}
+				}
+
+				auto iter = m_SelectSequence.begin();
+				while (iter != m_SelectSequence.end())
+				{
+					if (iter->target_type != TARGET_SINGLE_ALLY && iter->target_type != TARGET_SINGLE_ENEMY && iter != m_SelectSequence.begin())
+					{
+						if (iter == m_SelectSequence.begin())
+						{
+							m_SelectSequence.erase(iter);
+							iter = m_SelectSequence.begin();
+						}
+						else
+						{
+							m_SelectSequence.erase(iter--);
+							++iter;
+						}
+					}
+					else
+					{
+						++iter;
+					}
+				}
+
+				// Hover the cursor over the currently selected target(s)
+				m_Selecting = m_SelectSequence.begin();
+				m_SelectedTarget = 0;
+				reset_cursor();
+
+				break;
+			}
+			}
+		}
+	}
+
 	return EVENT_STOP;
 }
 
@@ -692,12 +1013,96 @@ int EjectEvent::start()
 
 
 
-EffectSet::EffectSet(EffectSet* other) : target_effects(other->target_effects), user_effects(other->user_effects)
+EffectSequence::EffectSequence(vector<Effect*>& effects) : effects(effects) {}
+
+EffectSequence::~EffectSequence()
+{
+	for (auto iter = effects.begin(); iter != effects.end(); ++iter)
+		delete *iter;
+}
+
+void EffectSequence::enqueue(Entity* user, Entity* target) const
+{
+	for (auto iter = effects.rbegin(); iter != effects.rend(); ++iter)
+	{
+		primary_queue_insert((*iter)->generate_event(user, target));
+	}
+}
+
+
+TargetSequence::TargetSelection::TargetSelection() {}
+
+TargetSequence::TargetSelection::TargetSelection(Target target, shared_ptr<EffectSequence> effects) : target(target), effects(effects) {}
+
+TargetSequence::TargetSequence(TargetSequence* other) : targets(other->targets)
 {
 	animation = other->animation;
 }
 
-EffectSet::EffectSet(Effect* animation, vector<Effect*>& target_effects, vector<Effect*>& user_effects) : animation(animation), target_effects(target_effects), user_effects(user_effects) {}
+TargetSequence::TargetSequence(Effect* animation, Target target, vector<Effect*>& target_effects, int speed) : animation(animation)
+{
+	targets.resize(2);
+
+	targets[0].target = target;
+	targets[0].effects = shared_ptr<EffectSequence>(new EffectSequence(target_effects));
+
+	targets[1].target = TARGET_SELF;
+	targets[1].effects = shared_ptr<EffectSequence>(new EffectSequence(vector<Effect*>({ new InflictStatusEffect(TIME_STATUS, TIMELINE_MAX * (6 - speed) / 5) })));
+}
+
+void TargetSequence::push_back(Target target, Effect* effect)
+{
+	push_back(target, vector<Effect*>({ effect }));
+}
+
+void TargetSequence::push_back(Target target, vector<Effect*>& effects)
+{
+	targets.emplace_back(target, shared_ptr<EffectSequence>(new EffectSequence(effects)));
+}
+
+void TargetSequence::enqueue(Entity* user, vector<Entity*>& single_targets) const
+{
+	auto targ_iter = single_targets.rbegin();
+
+	for (auto iter = targets.rbegin(); iter != targets.rend(); ++iter)
+	{
+		// Figure out who the targets for this sequence are
+		vector<Entity*> t;
+		switch (iter->target)
+		{
+		case TARGET_SINGLE_ALLY:
+		case TARGET_SINGLE_ENEMY:
+		case TARGET_RANDOM_ENEMY:
+			if (targ_iter != single_targets.rend())
+			{
+				t = vector<Entity*>({ *targ_iter++ });
+			}
+			else
+			{
+				// TODO error
+			}
+			break;
+		case TARGET_ALL_ALLIES:
+			t = user->party->allies;
+			break;
+		case TARGET_ALL_ENEMIES:
+			t = user->party->enemies->allies;
+			break;
+		case TARGET_SELF:
+			t = vector<Entity*>({ user });
+			break;
+		}
+
+		// Queue up the events
+		for (auto t_iter = t.rbegin(); t_iter != t.rend(); ++t_iter)
+		{
+			iter->effects->enqueue(user, *t_iter);
+		}
+	}
+}
+
+
+Usable::Usable(onion::Graphic* icon, Effect* animation, Target target, vector<Effect*>& target_effects, int speed) : TargetSequence(animation, target, target_effects, speed), icon(icon) {}
 
 
 DamageEffect::DamageEffect(int damage) : damage(damage) {}
@@ -717,34 +1122,6 @@ Event* InflictStatusEffect::generate_event(Entity* user, Entity* target) const
 
 
 
-Action::Action(Target target, Effect* animation, vector<Effect*>& target_effects, vector<Effect*>& user_effects) : EffectSet(animation, target_effects, user_effects), target(target) {}
-
-
-void Turn::enqueue()
-{
-	// Queue user effects, in reverse
-	for (auto iter = action->user_effects.rbegin(); iter != action->user_effects.rend(); ++iter)
-	{
-		primary_queue_insert((*iter)->generate_event(user, user));
-	}
-
-	// Queue target effects, in reverse
-	for (auto iter1 = targets.rbegin(); iter1 != targets.rend(); ++iter1)
-	{
-		for (auto iter2 = action->target_effects.rbegin(); iter2 != action->target_effects.rend(); ++iter2)
-		{
-			primary_queue_insert((*iter2)->generate_event(user, *iter1));
-		}
-	}
-
-	// Queue the animation
-	if (action->animation)
-	{
-		primary_queue_insert(action->animation->generate_event(user, targets[0]));
-	}
-}
-
-
 Agent::Agent(Entity* self)
 {
 	m_Self = self;
@@ -760,21 +1137,28 @@ SPRITE_KEY battle::State::m_Sprites[BATTLE_SPRITE_COUNT]{};
 #define TIMELINE_LEFT_CAP			0
 #define TIMELINE_RIGHT_CAP			1
 #define TIMELINE_ICON				2
+
 #define ALLY_BG						3
 #define ALLY_SHIELD					4
 #define ALLY_HEALTH					5
 #define ALLY_BAR_IN					31
+
 #define COLOR_SHIELD				6
 #define COLOR_HEALTH				7
+
 #define SMALL_NUMBERS				8
 #define LARGE_NUMBERS				18
+
 #define ENEMY_BAR_CAP				28
 #define ENEMY_BAR_MID				29
 #define ENEMY_BAR_IN				30
+
 #define STATUS_OFFENSE				32
 #define STATUS_DEFENSE				33
 #define STATUS_BURN					34
 #define STATUS_TOXIN				35
+
+#define CURSORS						36
 
 battle::State::State(const vector<string>& enemies) 
 {
@@ -805,6 +1189,10 @@ battle::State::State(const vector<string>& enemies)
 		m_Sprites[STATUS_BURN] = Sprite::get_sprite("battle status burn")->key;
 		m_Sprites[STATUS_TOXIN] = Sprite::get_sprite("battle status toxin")->key;
 
+		m_Sprites[CURSORS] = Sprite::get_sprite("battle cursor linh")->key;
+		m_Sprites[CURSORS + 1] = Sprite::get_sprite("battle cursor mosi")->key;
+		m_Sprites[CURSORS + 2] = Sprite::get_sprite("battle cursor jude")->key;
+
 		for (int k = 9; k >= 0; --k)
 		{
 			m_Sprites[SMALL_NUMBERS + k] = Sprite::get_sprite("battle small number " + to_string(k))->key;
@@ -819,7 +1207,9 @@ battle::State::State(const vector<string>& enemies)
 	m_Background = SolidColorGraphic::generate(218, 183, 183, 255, app->width, app->height - 80);
 
 	// Set data for allies
-	g_Allies.allies.resize(3);
+	vector<overworld::Ally>& party = overworld::get_party();
+
+	g_Allies.allies.resize(party.size());
 
 	Sprite* ally_bg = Sprite::get_sprite("battle ally bg");
 	vec2i ally_dimensions(ally_bg->width, ally_bg->height);
@@ -827,28 +1217,18 @@ battle::State::State(const vector<string>& enemies)
 
 	PALETTE_MATRIX ui_palette = get_ui_palette()->get_red_palette_matrix();
 
-	for (int k = 2; k >= 0; --k)
+	for (int k = party.size() - 1; k >= 0; --k)
 	{
-		Entity* ally = new Ally();
+		Ally* ally = new Ally(party[k]);
 		g_Allies.allies[k] = ally;
+
+		string name = k == 0 ? "linh" : (k == 1 ? "mosi" : "jude");
+		ally->cursor = new StaticSpriteGraphic(m_SpriteSheet, Sprite::get_sprite("battle cursor " + name), g_ClearPalette);
 
 		ally->coordinates = vec2i(ally_x, -1);
 		ally->dimensions = ally_dimensions;
 
-		ally->cur_health = 999; // TODO
-		ally->max_health = 999;
-
-		ally->cur_shield = 999;
-		ally->max_shield = 999;
-
 		ally->time = (rand() % (4 * TIMELINE_MAX / 5)) + (TIMELINE_MAX / 5);
-
-		ally->palette.set_red_maps_to(vec4f(ui_palette.get(0, 0), ui_palette.get(1, 0), ui_palette.get(2, 0), ui_palette.get(3, 0)));
-		ally->palette.set_green_maps_to(vec4f(ui_palette.get(0, 1), ui_palette.get(1, 1), ui_palette.get(2, 1), ui_palette.get(3, 1)));
-		ally->palette.set_blue_maps_to(vec4f(ui_palette.get(0, 2), ui_palette.get(1, 2), ui_palette.get(2, 2), ui_palette.get(3, 2)));
-
-		// debug TODO remove
-		ally->agent = new BerserkAgent(ally);
 
 		ally_x += ally_bg->width;
 	}
@@ -868,7 +1248,7 @@ battle::State::State(const vector<string>& enemies)
 		enemy_width += enemy->image->get_width();
 
 		// debug TODO remove
-		enemy->agent = new BerserkAgent(enemy);
+		enemy->agent = new RandomAgent(enemy);
 
 		enemy->time = (rand() % (4 * TIMELINE_MAX / 5)) + (TIMELINE_MAX / 5);
 	}
@@ -1253,8 +1633,11 @@ void battle::State::display() const
 		mat_pop();
 	}
 
-	// Draw any animations
+	// Display any number animations
 	NumberEvent::Animation::display_all();
+
+	// Display any cursors and shit
+	EntityEvent::display();
 
 	// Clean up the transform
 	mat_pop();

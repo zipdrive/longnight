@@ -54,6 +54,25 @@ int TickEvent::start()
 
 
 
+TurnBeginListener::_Map g_TurnBeginListeners;
+
+TurnBeginListener::TurnBeginListener(int priority, Entity* entity) : Listener<Turn*>(g_TurnBeginListeners, priority, entity) {}
+
+void Turn::enqueue()
+{
+	// Trigger event listeners for when the turn begins
+	auto iter = g_TurnBeginListeners.find(user);
+	if (iter != g_TurnBeginListeners.end())
+	{
+		iter->second->trigger(this);
+	}
+
+	// Queue effects, in reverse
+	usable->enqueue(user, targets);
+}
+
+
+
 TurnEndListener::_Map g_TurnEndListeners;
 
 TurnEndListener::TurnEndListener(int priority, Entity* entity) : Listener<>(g_TurnEndListeners, priority, entity) {}

@@ -1,21 +1,38 @@
 #pragma once
+#include <memory>
 #include <onion.h>
 #include "queue.h"
 
 
-#define BASE_DAMAGE			500
+#define BASE_DAMAGE			100
 
 #define TIMELINE_MAX		60000
 
 
+namespace overworld
+{
+	struct Ally;
+}
+
 namespace battle
 {
 
+	enum Target
+	{
+		TARGET_SINGLE_ENEMY,
+		TARGET_ALL_ENEMIES,
+		TARGET_RANDOM_ENEMY,
+		TARGET_SINGLE_ALLY,
+		TARGET_ALL_ALLIES,
+		TARGET_SELF
+	};
+
+
 	class Agent;
+	struct Usable;
 
 	struct Party;
 
-	struct Action;
 
 	// An ally or enemy.
 	struct Entity
@@ -62,8 +79,8 @@ namespace battle
 		Party* party;
 
 
-		// All available actions.
-		std::vector<Action> actions;
+		// All available usables. (These should be constructed with new when the entity is initialized, and deleted when the entity is destroyed.)
+		std::vector<Usable*> usables;
 
 		// The Agent controlling the entity.
 		Agent* agent;
@@ -83,7 +100,7 @@ namespace battle
 		Entity();
 
 		/// <summary>Frees the memory of the entity.</summary>
-		virtual ~Entity() {}
+		virtual ~Entity();
 
 		/// <summary>Checks if an entity is an ally or an enemy of this one.</summary>
 		/// <param name="other">Another entity.</param>
@@ -93,6 +110,24 @@ namespace battle
 		/// <summary>Animates the entity's incapacitation.</summary>
 		virtual void defeat() = 0;
 	};
+
+	// A turn someone takes in battle.
+	struct Turn
+	{
+		// The action used.
+		Usable* usable;
+
+		// The entity using the usable.
+		Entity* user;
+
+		// The entities targeted by the usable.
+		std::vector<Entity*> targets;
+
+		/// <summary>Queues up the events from the turn.</summary>
+		void enqueue();
+	};
+
+
 
 	// A collection of entities who are allied.
 	struct Party
@@ -108,8 +143,14 @@ namespace battle
 	// A player character.
 	struct Ally : public Entity
 	{
+		// The ally's cursor.
+		onion::Graphic* cursor;
+
 		/// <summary>Constructs an entity primarily controlled by a character in battle.</summary>
-		Ally();
+		Ally(overworld::Ally& ally);
+
+		/// <summary>Destroys the cursor graphic, and stuff.</summary>
+		~Ally();
 
 		/// <summary>Animates the ally's incapacitation.</summary>
 		void defeat();
@@ -154,6 +195,9 @@ namespace battle
 	class Event
 	{
 	public:
+		/// <summary>Virtual deconstructor.</summary>
+		virtual ~Event() {}
+
 		/// <summary>A function called when the Event begins animating.</summary>
 		/// <returns>EVENT_STOP if the Event is finished, EVENT_CONTINUE otherwise.</returns>
 		virtual int start();
@@ -239,10 +283,70 @@ namespace battle
 	class EntityEvent : public Event, public onion::KeyboardListener
 	{
 	private:
+		// The event for the entity currently taking a turn.
+		static EntityEvent* m_ActiveEntity;
+
+
+		// Where to draw the cursors.
+		std::vector<vec2i> m_Cursors;
+
+		// How much to bob the cursor.
+		unsigned int m_CursorBob = 0;
+
+		/// <summary>Displays which entities are being targeted, and stuff.</summary>
+		void __display() const;
+
+
 		// The entity taking a turn.
 		Entity* m_Entity;
 
+
+		struct TS
+		{
+			// Who it is targeting.
+			Target target_type;
+
+			// The index that this target maps to.
+			int target_index;
+
+			TS(Target target_type, int target_index);
+		};
+		
+		
+		// The sequence of targets to select.
+		std::list<TS> m_SelectSequence;
+
+		// What the player is currently selecting.
+		std::list<TS>::iterator m_Selecting;
+
+		// The target currently selected by the player.
+		int m_SelectedTarget;
+		
+		
+		// The usable selected by the player.
+		int m_SelectedUsable;
+
+		// The target angle for the usable icons.
+		float m_TargetUsableAngle;
+
+		// The current angle of the usable icons.
+		float m_UsableAngle;
+
+
+		/// <summary>Hover over a target.</summary>
+		/// <param name="entity">The entity being hovered over.</param>
+		void hover_cursor(Entity* entity);
+
+		void reset_cursor();
+
+
+		// The selected action for the turn.
+		Turn m_Turn;
+
 	public:
+		/// <summary>Displays which entities are being targeted, and stuff.</summary>
+		static void display();
+
 		/// <summary>Creates an event where an entity takes a turn.</summary>
 		/// <param name="entity">The entity taking a turn.</param>
 		EntityEvent(Entity* entity);
@@ -619,27 +723,89 @@ namespace battle
 		virtual Event* generate_event(Entity* user, Entity* target) const = 0;
 	};
 
-	// A set of effects.
-	struct EffectSet
+
+	// A sequence of effects, applied to the same targets.
+	struct EffectSequence
 	{
+		// The effects applied to all targeted entities, in sequential order.
+		std::vector<Effect*> effects;
+
+		/// <summary>Constructs a sequence of events, all applied to the same targets.</summary>
+		/// <param name="effects">The effects applied to all targeted entities, in sequential order.</param>
+		EffectSequence(std::vector<Effect*>& effects);
+
+		/// <summary>Destroys the effect sequence.</summary>
+		~EffectSequence();
+
+		/// <summary>Enqueues the events.</summary>
+		void enqueue(Entity* user, Entity* target) const;
+	};
+
+	// A set of effects.
+	struct TargetSequence
+	{
+		struct TargetSelection
+		{
+			// The target for the effect sequence.
+			Target target;
+
+			// The sequence of effects to apply to all targeted entities.
+			std::shared_ptr<EffectSequence> effects;
+
+			TargetSelection();
+			
+			TargetSelection(Target target, std::shared_ptr<EffectSequence> effects);
+		};
+
+		// All targeted effects.
+		std::vector<TargetSelection> targets;
+
 		// The animation for when the set of effects activate.
 		Effect* animation = nullptr;
 
-		// Effects of the usable on all targeted entities, in sequential order.
-		std::vector<Effect*> target_effects;
-
-		// Effects of the usable on the user entity, in sequential order.
-		std::vector<Effect*> user_effects;
+		/// <summary>Constructs an empty target sequence.</summary>
+		TargetSequence() {}
 
 		/// <summary>Copies a set of effects.</summary>
 		/// <param name="other">The set of effects to copy.</param>
-		EffectSet(EffectSet* other);
+		TargetSequence(TargetSequence* other);
 
-		/// <summary>Constructs a set of effects.</summary>
+		/// <summary>Shortcut for what will be most target sequences: a single set of targets, and a time setback for the user.</summary>
 		/// <param name="animation">The animation for when the set of effects activate.</param>
-		/// <param name="target_effects">Effects of the usable on all targeted entities, in sequential order.</param>
-		/// <param name="user_effects">Effects of the usable on the user entity, in sequential order.</param>
-		EffectSet(Effect* animation, std::vector<Effect*>& target_effects, std::vector<Effect*>& user_effects);
+		/// <param name="target">Who is targeted by the usable.</param>
+		/// <param name="effects">Effects of the usable on all targeted entities, in sequential order.</param>
+		/// <param name="speed">How little the user is pushed back in the timeline, with 1 being the least and 5 being the most.</param>
+		TargetSequence(Effect* animation, Target target, std::vector<Effect*>& effects, int speed);
+
+		/// <summary>Adds a new target and effect to the back of the current sequence.</summary>
+		/// <param name="target">Who is targeted by the effect.</param>
+		/// <param name="effect">The single effect on the target.</param>
+		void push_back(Target target, Effect* effect);
+		
+		/// <summary>Adds a new target and sequence of effects to the back of the current sequence.</summary>
+		/// <param name="target">Who is targeted by the sequence.</param>
+		/// <param name="effects">Effects of the usable on all targeted entities, in sequential order.</param>
+		void push_back(Target target, std::vector<Effect*>& effects);
+
+		/// <summary>Enqueues the events of the target sequence.</summary>
+		/// <param name="user">The user of the target sequence.</param>
+		/// <param name="single_targets">A vector of all single targets, in the order that they are required.</param>
+		void enqueue(Entity* user, std::vector<Entity*>& single_targets) const;
+	};
+
+	// Something that can be used as an entity's turn.
+	struct Usable : public TargetSequence
+	{
+		// The icon for the usable.
+		onion::Graphic* icon;
+
+		/// <summary>Shortcut for what will be most usables: a single set of targets, and a time setback for the user.</summary>
+		/// <param name="icon">The icon for the usable.</param>
+		/// <param name="animation">The animation for when the set of effects activate.</param>
+		/// <param name="target">Who is targeted by the usable.</param>
+		/// <param name="effects">Effects of the usable on all targeted entities, in sequential order.</param>
+		/// <param name="speed">How little the user is pushed back in the timeline, with 1 being the least and 5 being the most.</param>
+		Usable(onion::Graphic* icon, Effect* animation, Target target, std::vector<Effect*>& effects, int speed);
 	};
 
 
@@ -682,52 +848,8 @@ namespace battle
 	};
 
 
-	enum Target
-	{
-		TARGET_SINGLE_ENEMY,
-		TARGET_ALL_ENEMIES,
-		TARGET_RANDOM_ENEMY,
-		TARGET_SINGLE_ALLY,
-		TARGET_ALL_ALLIES,
-		TARGET_SELF
-	};
+
 	
-	// Something that you can use.
-	struct Usable : public EffectSet
-	{
-		// The default target for the usable.
-		Target default_target;
-	};
-
-	// Something that you can use in battle.
-	struct Action : public EffectSet
-	{
-		// The target for the action.
-		Target target;
-
-		/// <summary>Constructs an action.</summary>
-		/// <param name="target">The target for the action.</param>
-		/// <param name="animation">The animation for when the set of effects activate.</param>
-		/// <param name="target_effects">Effects of the usable on all targeted entities, in sequential order.</param>
-		/// <param name="user_effects">Effects of the usable on the user entity, in sequential order.</param>
-		Action(Target target, Effect* animation, std::vector<Effect*>& target_effects, std::vector<Effect*>& user_effects);
-	};
-
-	// A turn someone takes in battle.
-	struct Turn
-	{
-		// The action used.
-		Action* action;
-
-		// The entity using the usable.
-		Entity* user;
-
-		// The entities targeted by the usable.
-		std::vector<Entity*> targets;
-
-		/// <summary>Queues up the events from the turn.</summary>
-		void enqueue();
-	};
 	
 	
 	struct Agent
@@ -741,8 +863,9 @@ namespace battle
 		/// <param name="self">The entity that the agent represents.</param>
 		Agent(Entity* self);
 
-		/// <summary>Decides what to do and queues up events that do it.</summary>
-		virtual void enqueue() = 0;
+		/// <summary>Decides what to do on their turn.</summary>
+		/// <param name="turn">To be filled out with the data about the entity's action.</param>
+		virtual void decide(Turn& turn) = 0;
 	};
 
 
@@ -754,7 +877,7 @@ namespace battle
 		// The sheet of sprites for the battle UI.
 		static onion::SpriteSheet* m_SpriteSheet;
 
-#define BATTLE_SPRITE_COUNT 36
+#define BATTLE_SPRITE_COUNT 39
 
 		// An array of sprites for the battle UI.
 		static SPRITE_KEY m_Sprites[BATTLE_SPRITE_COUNT];

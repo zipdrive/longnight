@@ -7,6 +7,7 @@ namespace battle
 
 	// Predefinitions
 	class Entity;
+	struct Turn;
 
 	template <typename... _Args>
 	class Listener;
@@ -122,17 +123,28 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity passes a tick.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		TickListener(int priority, Entity* entity);
 	};
 	
 
 	
+	class TurnBeginListener : public Listener<Turn*>
+	{
+	public:
+		/// <summary>Creates a listener for when a particular entity begins their turn.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
+		/// <param name="entity">The entity in question.</param>
+		TurnBeginListener(int priority, Entity* entity);
+	};
+	
 	// A listener that triggers whenever a particular entity ends their turn.
 	class TurnEndListener : public Listener<>
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity's turn ends.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		TurnEndListener(int priority, Entity* entity);
 	};
@@ -146,6 +158,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity's turn ends.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		BeforeTakeDamageListener(int priority, Entity* entity);
 	};
@@ -155,6 +168,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity deals damage.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		DealDamageListener(int priority, Entity* entity);
 	};
@@ -164,6 +178,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener that triggers after a particular entity takes damage.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		AfterTakeDamageListener(int priority, Entity* entity);
 	};
@@ -177,6 +192,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity's turn ends.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		BeforeStatusInflictedListener(int priority, Entity* entity);
 	};
@@ -186,6 +202,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener for when a particular entity deals damage.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		InflictStatusListener(int priority, Entity* entity);
 	};
@@ -195,6 +212,7 @@ namespace battle
 	{
 	public:
 		/// <summary>Creates a listener that triggers after a particular entity is inflicted with a status effect.</summary>
+		/// <param name="priority">The priority for the listener. Low numbers trigger before high numbers.</param>
 		/// <param name="entity">The entity in question.</param>
 		AfterStatusInflictedListener(int priority, Entity* entity);
 	};

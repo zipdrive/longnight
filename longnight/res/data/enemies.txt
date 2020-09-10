@@ -1,1 +1,1 @@
-trafmimic           name = "Trafmimic Cone"         type = "road"       health = "999"      shield = "999"      offense = "5"       defense = "5"
+trafmimic           name = "Trafmimic Cone"         type = "road"       health = "999"      shield = "999"      offense = "5"       defense = "5"       items = "debug offense"

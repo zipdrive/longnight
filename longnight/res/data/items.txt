@@ -1,0 +1,2 @@
+debug offense               name="Debug Offense"        icon="red pendant"          type="offense"      damage="100"
+debug support               name="Debug Support"        icon="red pendant"          type="support"      health="200"

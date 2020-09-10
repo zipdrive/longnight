@@ -3,21 +3,18 @@
 
 namespace battle
 {
-
-	// An agent that damages a random enemy each turn.
-	class BerserkAgent : public Agent
+	
+	// An agent that acts totally at random.
+	class RandomAgent : public Agent
 	{
-	private:
-		// An action that damages a random enemy.
-		static Action m_BerserkAction;
-
 	public:
-		/// <summary>Constructs an agent that damages a random enemy each turn.</summary>
-		/// <param name="self">The entity represented by the agent.</param>
-		BerserkAgent(Entity* self);
+		/// <summary>Constructs an agent that acts totally at random.</summary>
+		/// <param name="self">The entity that the agent acts for.</param>
+		RandomAgent(Entity* self);
 
-		/// <summary>Enqueues the entity's action.</summary>
-		void enqueue();
+		/// <summary>Picks a random action for the entity.</summary>
+		/// <param name="turn">To be filled out with the data for the turn.</param>
+		void decide(Turn& turn);
 	};
 
 }
